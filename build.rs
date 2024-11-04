@@ -11,10 +11,14 @@ fn generate_protos() -> std::io::Result<()> {
     tonic_build::configure()
         .build_server(false)
         .build_client(true)
-        .out_dir("src/generated") // you can change the generated code's location
+        .out_dir("src/generated")
         .compile_protos(
-            &["proto/v1/admin.proto"],
-            &["proto"], // specify the root location to search proto dependencies
+            &[
+                "proto/v1/admin.proto",
+                "proto/v1/service.proto",
+                "proto/v1/wallet.proto",
+            ],
+            &["proto"],
         )?;
     Ok(())
 }
