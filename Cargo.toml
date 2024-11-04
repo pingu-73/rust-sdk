@@ -3,7 +3,13 @@ name = "ark-rs"
 version = "0.1.0"
 edition = "2021"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(genproto)'] }
+
 [dependencies]
 anyhow = "1"
 bitcoin = "0.32.4"
 tokio = { version = "1.41.0", features = ["full"] }
+
+[target.'cfg(genproto)'.build-dependencies]
+prost-build = "0.13.3"

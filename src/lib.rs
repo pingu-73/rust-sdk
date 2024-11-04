@@ -53,6 +53,9 @@ pub mod tests {
 
     #[tokio::test]
     pub async fn test() {
+        let out_dir = std::env::var("OUT_DIR").unwrap();
+        println!("hello world {out_dir}");
+
         let alice = setup_client("alice".to_string()).await.unwrap();
         let bob = setup_client("bob".to_string()).await.unwrap();
 
