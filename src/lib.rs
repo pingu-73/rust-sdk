@@ -1,7 +1,21 @@
+use crate::generated::ark::v1::admin_service_client::AdminServiceClient;
+use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
+use crate::generated::ark::v1::GetInfoRequest;
 use anyhow::Result;
 use bitcoin::Address;
 use bitcoin::OutPoint;
 use std::str::FromStr;
+
+// pub mod ark {
+//     tonic::include_proto!("ark.v1");
+// }
+pub mod generated {
+    #[path = ""]
+    pub mod ark {
+        #[path = "ark.v1.rs"]
+        pub mod v1;
+    }
+}
 
 struct ArkClient {
     name: String,
@@ -26,6 +40,16 @@ impl ArkClient {
     pub fn new(name: String) -> Self {
         Self { name }
     }
+
+    pub async fn connect(&self) -> Result<()> {
+        let mut client = ArkServiceClient::connect("http://localhost:7070")
+            .await
+            .unwrap();
+        let response = client.get_info(GetInfoRequest {}).await?;
+        let response = response.into_inner();
+        dbg!(response);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -41,6 +65,7 @@ pub mod tests {
     async fn setup_client(name: String) -> Result<ArkClient> {
         let client = ArkClient::new(name);
         // setup the client
+        client.connect().await?;
         Ok(client)
     }
     async fn faucet_fund(address: Address, amount: Amount) -> Result<OutPoint> {
@@ -53,9 +78,6 @@ pub mod tests {
 
     #[tokio::test]
     pub async fn test() {
-        let out_dir = std::env::var("OUT_DIR").unwrap();
-        println!("hello world {out_dir}");
-
         let alice = setup_client("alice".to_string()).await.unwrap();
         let bob = setup_client("bob".to_string()).await.unwrap();
 

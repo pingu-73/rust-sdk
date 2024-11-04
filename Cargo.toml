@@ -9,7 +9,9 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(genproto)'] }
 [dependencies]
 anyhow = "1"
 bitcoin = "0.32.4"
+prost = "0.13.3"
 tokio = { version = "1.41.0", features = ["full"] }
+tonic = "0.12.3"
 
 [target.'cfg(genproto)'.build-dependencies]
 tonic-build = { version = "0.12.3" }
