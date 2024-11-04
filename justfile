@@ -44,8 +44,6 @@ clarkd-setup:
 clarkd-kill:
     docker compose -f $CLARKD_COMPOSE_FILE down
 
-# wait-until-clarkd-wallet-is-ready:
-
 _wait-until-clarkd-is-ready:
     #!/usr/bin/env bash
 
