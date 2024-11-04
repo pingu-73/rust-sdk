@@ -6,9 +6,6 @@ use bitcoin::Address;
 use bitcoin::OutPoint;
 use std::str::FromStr;
 
-// pub mod ark {
-//     tonic::include_proto!("ark.v1");
-// }
 pub mod generated {
     #[path = ""]
     pub mod ark {
