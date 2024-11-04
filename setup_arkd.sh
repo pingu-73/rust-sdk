@@ -4,7 +4,7 @@ docker compose -f docker-compose.clark.regtest.yml up
 
 seed=$(curl http://localhost:7070/v1/admin/wallet/seed | jq .seed -r)
 
-curl --data-binary '{"seed": "$seed", "password": "password"}' -H "Content-Type: application/json" http://localhost:7070/v1/admin/wallet/create
+curl --data-binary "{\"seed\": \"$seed\", \"password\": \"password\"}" -H "Content-Type: application/json" http://localhost:7070/v1/admin/wallet/create
 
 sleep 1
 
