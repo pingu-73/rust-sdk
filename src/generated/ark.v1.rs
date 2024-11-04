@@ -69,10 +69,10 @@ pub mod admin_service_client {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value,
+        clippy::let_unit_value
     )]
-    use tonic::codegen::*;
     use tonic::codegen::http::Uri;
+    use tonic::codegen::*;
     #[derive(Debug, Clone)]
     pub struct AdminServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -116,9 +116,8 @@ pub mod admin_service_client {
                     <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
                 >,
             >,
-            <T as tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
-            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+            <T as tonic::codegen::Service<http::Request<tonic::body::BoxBody>>>::Error:
+                Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             AdminServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -156,22 +155,14 @@ pub mod admin_service_client {
         pub async fn get_scheduled_sweep(
             &mut self,
             request: impl tonic::IntoRequest<super::GetScheduledSweepRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetScheduledSweepResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::GetScheduledSweepResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.AdminService/GetScheduledSweep",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.AdminService/GetScheduledSweep");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.AdminService", "GetScheduledSweep"));
@@ -180,22 +171,13 @@ pub mod admin_service_client {
         pub async fn get_round_details(
             &mut self,
             request: impl tonic::IntoRequest<super::GetRoundDetailsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetRoundDetailsResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::GetRoundDetailsResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.AdminService/GetRoundDetails",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.AdminService/GetRoundDetails");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.AdminService", "GetRoundDetails"));
@@ -204,22 +186,12 @@ pub mod admin_service_client {
         pub async fn get_rounds(
             &mut self,
             request: impl tonic::IntoRequest<super::GetRoundsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetRoundsResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::GetRoundsResponse>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.AdminService/GetRounds",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.AdminService/GetRounds");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.AdminService", "GetRounds"));
@@ -247,9 +219,7 @@ pub struct GetInfoResponse {
     #[prost(string, tag = "7")]
     pub boarding_descriptor_template: ::prost::alloc::string::String,
     #[prost(string, repeated, tag = "8")]
-    pub vtxo_descriptor_templates: ::prost::alloc::vec::Vec<
-        ::prost::alloc::string::String,
-    >,
+    pub vtxo_descriptor_templates: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "9")]
     pub forfeit_address: ::prost::alloc::string::String,
 }
@@ -640,10 +610,10 @@ pub mod ark_service_client {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value,
+        clippy::let_unit_value
     )]
-    use tonic::codegen::*;
     use tonic::codegen::http::Uri;
+    use tonic::codegen::*;
     #[derive(Debug, Clone)]
     pub struct ArkServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -687,9 +657,8 @@ pub mod ark_service_client {
                     <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
                 >,
             >,
-            <T as tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
-            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+            <T as tonic::codegen::Service<http::Request<tonic::body::BoxBody>>>::Error:
+                Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             ArkServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -727,45 +696,28 @@ pub mod ark_service_client {
         pub async fn get_info(
             &mut self,
             request: impl tonic::IntoRequest<super::GetInfoRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetInfoResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::GetInfoResponse>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.ArkService/GetInfo",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/GetInfo");
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("ark.v1.ArkService", "GetInfo"));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.ArkService", "GetInfo"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn get_boarding_address(
             &mut self,
             request: impl tonic::IntoRequest<super::GetBoardingAddressRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetBoardingAddressResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::GetBoardingAddressResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.ArkService/GetBoardingAddress",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.ArkService/GetBoardingAddress");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.ArkService", "GetBoardingAddress"));
@@ -778,23 +730,18 @@ pub mod ark_service_client {
             tonic::Response<super::RegisterInputsForNextRoundResponse>,
             tonic::Status,
         > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/ark.v1.ArkService/RegisterInputsForNextRound",
             );
             let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new("ark.v1.ArkService", "RegisterInputsForNextRound"),
-                );
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.ArkService",
+                "RegisterInputsForNextRound",
+            ));
             self.inner.unary(req, path, codec).await
         }
         pub async fn register_outputs_for_next_round(
@@ -804,44 +751,30 @@ pub mod ark_service_client {
             tonic::Response<super::RegisterOutputsForNextRoundResponse>,
             tonic::Status,
         > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/ark.v1.ArkService/RegisterOutputsForNextRound",
             );
             let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new("ark.v1.ArkService", "RegisterOutputsForNextRound"),
-                );
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.ArkService",
+                "RegisterOutputsForNextRound",
+            ));
             self.inner.unary(req, path, codec).await
         }
         pub async fn submit_tree_nonces(
             &mut self,
             request: impl tonic::IntoRequest<super::SubmitTreeNoncesRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::SubmitTreeNoncesResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::SubmitTreeNoncesResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.ArkService/SubmitTreeNonces",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/SubmitTreeNonces");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.ArkService", "SubmitTreeNonces"));
@@ -850,22 +783,14 @@ pub mod ark_service_client {
         pub async fn submit_tree_signatures(
             &mut self,
             request: impl tonic::IntoRequest<super::SubmitTreeSignaturesRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::SubmitTreeSignaturesResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::SubmitTreeSignaturesResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.ArkService/SubmitTreeSignatures",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.ArkService/SubmitTreeSignatures");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.ArkService", "SubmitTreeSignatures"));
@@ -878,21 +803,17 @@ pub mod ark_service_client {
             tonic::Response<super::SubmitSignedForfeitTxsResponse>,
             tonic::Status,
         > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.ArkService/SubmitSignedForfeitTxs",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.ArkService/SubmitSignedForfeitTxs");
             let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("ark.v1.ArkService", "SubmitSignedForfeitTxs"));
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.ArkService",
+                "SubmitSignedForfeitTxs",
+            ));
             self.inner.unary(req, path, codec).await
         }
         pub async fn get_event_stream(
@@ -902,18 +823,11 @@ pub mod ark_service_client {
             tonic::Response<tonic::codec::Streaming<super::GetEventStreamResponse>>,
             tonic::Status,
         > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.ArkService/GetEventStream",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/GetEventStream");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.ArkService", "GetEventStream"));
@@ -923,39 +837,26 @@ pub mod ark_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::PingRequest>,
         ) -> std::result::Result<tonic::Response<super::PingResponse>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/Ping");
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("ark.v1.ArkService", "Ping"));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.ArkService", "Ping"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn create_payment(
             &mut self,
             request: impl tonic::IntoRequest<super::CreatePaymentRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::CreatePaymentResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::CreatePaymentResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.ArkService/CreatePayment",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/CreatePayment");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.ArkService", "CreatePayment"));
@@ -964,22 +865,13 @@ pub mod ark_service_client {
         pub async fn complete_payment(
             &mut self,
             request: impl tonic::IntoRequest<super::CompletePaymentRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::CompletePaymentResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::CompletePaymentResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.ArkService/CompletePayment",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/CompletePayment");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.ArkService", "CompletePayment"));
@@ -988,22 +880,12 @@ pub mod ark_service_client {
         pub async fn get_round(
             &mut self,
             request: impl tonic::IntoRequest<super::GetRoundRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetRoundResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::GetRoundResponse>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.ArkService/GetRound",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/GetRound");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.ArkService", "GetRound"));
@@ -1012,22 +894,13 @@ pub mod ark_service_client {
         pub async fn get_round_by_id(
             &mut self,
             request: impl tonic::IntoRequest<super::GetRoundByIdRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetRoundByIdResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::GetRoundByIdResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.ArkService/GetRoundById",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/GetRoundById");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.ArkService", "GetRoundById"));
@@ -1036,22 +909,12 @@ pub mod ark_service_client {
         pub async fn list_vtxos(
             &mut self,
             request: impl tonic::IntoRequest<super::ListVtxosRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ListVtxosResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::ListVtxosResponse>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.ArkService/ListVtxos",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/ListVtxos");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.ArkService", "ListVtxos"));
@@ -1061,26 +924,20 @@ pub mod ark_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::GetTransactionsStreamRequest>,
         ) -> std::result::Result<
-            tonic::Response<
-                tonic::codec::Streaming<super::GetTransactionsStreamResponse>,
-            >,
+            tonic::Response<tonic::codec::Streaming<super::GetTransactionsStreamResponse>>,
             tonic::Status,
         > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.ArkService/GetTransactionsStream",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.ArkService/GetTransactionsStream");
             let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("ark.v1.ArkService", "GetTransactionsStream"));
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.ArkService",
+                "GetTransactionsStream",
+            ));
             self.inner.server_streaming(req, path, codec).await
         }
     }
@@ -1167,10 +1024,10 @@ pub mod wallet_initializer_service_client {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value,
+        clippy::let_unit_value
     )]
-    use tonic::codegen::*;
     use tonic::codegen::http::Uri;
+    use tonic::codegen::*;
     #[derive(Debug, Clone)]
     pub struct WalletInitializerServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -1214,13 +1071,10 @@ pub mod wallet_initializer_service_client {
                     <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
                 >,
             >,
-            <T as tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
-            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+            <T as tonic::codegen::Service<http::Request<tonic::body::BoxBody>>>::Error:
+                Into<StdError> + std::marker::Send + std::marker::Sync,
         {
-            WalletInitializerServiceClient::new(
-                InterceptedService::new(inner, interceptor),
-            )
+            WalletInitializerServiceClient::new(InterceptedService::new(inner, interceptor))
         }
         /// Compress requests with the given encoding.
         ///
@@ -1256,43 +1110,30 @@ pub mod wallet_initializer_service_client {
         pub async fn gen_seed(
             &mut self,
             request: impl tonic::IntoRequest<super::GenSeedRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GenSeedResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::GenSeedResponse>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.WalletInitializerService/GenSeed",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.WalletInitializerService/GenSeed");
             let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("ark.v1.WalletInitializerService", "GenSeed"));
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.WalletInitializerService",
+                "GenSeed",
+            ));
             self.inner.unary(req, path, codec).await
         }
         pub async fn create(
             &mut self,
             request: impl tonic::IntoRequest<super::CreateRequest>,
         ) -> std::result::Result<tonic::Response<super::CreateResponse>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.WalletInitializerService/Create",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.WalletInitializerService/Create");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.WalletInitializerService", "Create"));
@@ -1301,43 +1142,30 @@ pub mod wallet_initializer_service_client {
         pub async fn restore(
             &mut self,
             request: impl tonic::IntoRequest<super::RestoreRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::RestoreResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::RestoreResponse>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.WalletInitializerService/Restore",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.WalletInitializerService/Restore");
             let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("ark.v1.WalletInitializerService", "Restore"));
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.WalletInitializerService",
+                "Restore",
+            ));
             self.inner.unary(req, path, codec).await
         }
         pub async fn unlock(
             &mut self,
             request: impl tonic::IntoRequest<super::UnlockRequest>,
         ) -> std::result::Result<tonic::Response<super::UnlockResponse>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.WalletInitializerService/Unlock",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.WalletInitializerService/Unlock");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.WalletInitializerService", "Unlock"));
@@ -1346,25 +1174,18 @@ pub mod wallet_initializer_service_client {
         pub async fn get_status(
             &mut self,
             request: impl tonic::IntoRequest<super::GetStatusRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetStatusResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::GetStatusResponse>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.WalletInitializerService/GetStatus",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.WalletInitializerService/GetStatus");
             let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("ark.v1.WalletInitializerService", "GetStatus"));
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.WalletInitializerService",
+                "GetStatus",
+            ));
             self.inner.unary(req, path, codec).await
         }
     }
@@ -1376,10 +1197,10 @@ pub mod wallet_service_client {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value,
+        clippy::let_unit_value
     )]
-    use tonic::codegen::*;
     use tonic::codegen::http::Uri;
+    use tonic::codegen::*;
     #[derive(Debug, Clone)]
     pub struct WalletServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -1423,9 +1244,8 @@ pub mod wallet_service_client {
                     <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
                 >,
             >,
-            <T as tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
-            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+            <T as tonic::codegen::Service<http::Request<tonic::body::BoxBody>>>::Error:
+                Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             WalletServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -1464,41 +1284,26 @@ pub mod wallet_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::LockRequest>,
         ) -> std::result::Result<tonic::Response<super::LockResponse>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.WalletService/Lock",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.WalletService/Lock");
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("ark.v1.WalletService", "Lock"));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.WalletService", "Lock"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn derive_address(
             &mut self,
             request: impl tonic::IntoRequest<super::DeriveAddressRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::DeriveAddressResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::DeriveAddressResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.WalletService/DeriveAddress",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.WalletService/DeriveAddress");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.WalletService", "DeriveAddress"));
@@ -1507,22 +1312,13 @@ pub mod wallet_service_client {
         pub async fn get_balance(
             &mut self,
             request: impl tonic::IntoRequest<super::GetBalanceRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetBalanceResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::GetBalanceResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.WalletService/GetBalance",
-            );
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.WalletService/GetBalance");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.WalletService", "GetBalance"));
