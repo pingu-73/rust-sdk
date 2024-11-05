@@ -7,11 +7,15 @@ edition = "2021"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(genproto)'] }
 
 [dependencies]
-anyhow = "1"
-bitcoin = "0.32.4"
+bitcoin = { version = "0.32.4", features = ["rand"] }
+miniscript = "12"
 prost = "0.13.3"
+rand = "0.8.5"
 tokio = { version = "1.41.0", features = ["full"] }
 tonic = "0.12.3"
+
+[dev-dependencies]
+regex = "*"
 
 [target.'cfg(genproto)'.build-dependencies]
 tonic-build = { version = "0.12.3" }
