@@ -1,2 +1,5 @@
 #[derive(Debug)]
-pub enum Error {}
+pub enum Error {
+    AspNotConnected,
+    InvalidResponseType,
+}

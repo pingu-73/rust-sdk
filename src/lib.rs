@@ -1,8 +1,4 @@
 use crate::ark_address::ArkAddress;
-use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
-use crate::generated::ark::v1::GetInfoRequest;
-use crate::generated::ark::v1::GetInfoResponse;
-use crate::generated::ark::v1::ListVtxosRequest;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
@@ -21,7 +17,6 @@ use rand::CryptoRng;
 use rand::Rng;
 use std::collections::HashMap;
 use std::str::FromStr;
-use tonic::transport::Channel;
 
 pub mod generated {
     #[path = ""]
@@ -32,10 +27,11 @@ pub mod generated {
 }
 
 pub mod ark_address;
+mod asp;
 pub mod error;
 
-// TODO: Create a module to wrap the `ArkServiceClient`.
-// TODO: Figure out how to integrate on-chain wallet. Probably use a trait and implement using `bdk`.
+// TODO: Figure out how to integrate on-chain wallet. Probably use a trait and implement using
+// `bdk`.
 
 /// The Miniscript descriptor used for the boarding script.
 ///
@@ -60,12 +56,10 @@ const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d
 const BOARDING_REFUND_TIMEOUT: u64 = 604672;
 
 pub struct Client {
-    inner: Option<ArkServiceClient<Channel>>,
+    inner: asp::Client,
     name: String,
     kp: Keypair,
-    // TODO: We need to parse the contents of this response instead of using the `prost` type
-    // directly.
-    asp_info: Option<GetInfoResponse>,
+    asp_info: Option<asp::Info>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,8 +113,10 @@ impl Client {
     {
         let kp = Keypair::new(&secp, rng);
 
+        let inner = asp::Client::new("http://localhost:7070".to_string());
+
         Self {
-            inner: None,
+            inner,
             name,
             kp,
             asp_info: None,
@@ -128,15 +124,10 @@ impl Client {
     }
 
     pub async fn connect(&mut self) -> Result<(), Error> {
-        let mut client = ArkServiceClient::connect("http://localhost:7070")
-            .await
-            .unwrap();
-        let response = client.get_info(GetInfoRequest {}).await.unwrap();
-        let response = response.into_inner();
+        self.inner.connect().await?;
+        let info = self.inner.get_info().await?;
 
-        self.asp_info = Some(response);
-
-        self.inner = Some(client);
+        self.asp_info = Some(info);
 
         Ok(())
     }
@@ -156,7 +147,6 @@ impl Client {
         let vtxo_tap_key = vtxo_script.descriptor.internal_key();
 
         let network = asp_info.network;
-        let network = network.parse().unwrap();
 
         let ark_address = ArkAddress::new(network, asp, *vtxo_tap_key);
 
@@ -173,8 +163,6 @@ impl Client {
         let asp_info = self.asp_info.clone().unwrap();
 
         let network = asp_info.network;
-        // TODO: No idea if this works for other networks other than regtest.
-        let network = network.parse().unwrap();
 
         // TODO: Use descriptor from ASP when the ASP supports Miniscript.
         // let boarding_descriptor = asp_info.boarding_descriptor_template.replace(' ', "");
@@ -214,20 +202,12 @@ impl Client {
 
         let mut total = Amount::ZERO;
         for address in addresses.into_iter() {
-            let address = address.encode()?;
-            let res = self
-                .inner
-                .clone()
-                .unwrap()
-                .list_vtxos(ListVtxosRequest { address })
-                .await
-                .unwrap();
+            let res = self.inner.list_vtxos(address).await?;
 
             let sum = res
-                .into_inner()
-                .spendable_vtxos
+                .spendable
                 .iter()
-                .fold(Amount::ZERO, |acc, x| acc + Amount::from_sat(x.amount));
+                .fold(Amount::ZERO, |acc, x| acc + x.amount);
 
             total += sum;
         }
@@ -311,7 +291,8 @@ pub mod tests {
             .unwrap();
 
         let tx = String::from_utf8(res.stdout).unwrap();
-        let tx = Vec::from_hex(tx.trim()).unwrap();
+
+        let tx = Vec::from_hex(dbg!(tx.trim())).unwrap();
         let tx: Transaction = bitcoin::consensus::deserialize(&tx).unwrap();
 
         let (vout, _) = tx
