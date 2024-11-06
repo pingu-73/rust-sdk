@@ -1,10 +1,10 @@
 use crate::ark_address::ArkAddress;
-use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::Outpoint;
 use crate::generated::ark::v1::Output;
 use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
 use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
+use crate::generated::ark::v1::{GetEventStreamRequest, PingRequest};
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
@@ -24,6 +24,7 @@ use rand::Rng;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tonic::codegen::tokio_stream::StreamExt;
 
 pub mod generated {
@@ -62,8 +63,6 @@ const DEFAULT_VTXO_DESCRIPTOR_TEMPLATE_MINISCRIPT: &str =
     "tr(UNSPENDABLE_KEY,{and_v(v:pk(USER_1),pk(ASP)),and_v(v:older(TIMEOUT),pk(USER_0))})";
 
 const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
-
-const BOARDING_REFUND_TIMEOUT: u64 = 604672;
 
 pub struct Client<B> {
     inner: asp::Client,
@@ -152,6 +151,38 @@ where
         let info = self.inner.get_info().await?;
 
         self.asp_info = Some(info);
+
+        let mut client = self.inner.inner.clone().unwrap();
+
+        tokio::spawn({
+            let mut client = client.clone();
+            async move {
+                let response = client
+                    .get_event_stream(GetEventStreamRequest {})
+                    .await
+                    .unwrap();
+
+                let mut streaming = response.into_inner();
+                while let Some(event) = streaming.next().await {
+                    tracing::debug!("Received new event {event:?}");
+                }
+                tracing::error!("Event stream terminated");
+            }
+        });
+
+        // tokio::spawn(async move {
+        //     loop {
+        //         let response = client
+        //             .ping(PingRequest {
+        //                 payment_id: "WTF".to_string(),
+        //             })
+        //             .await
+        //             .unwrap();
+        //         tracing::debug!(?response, "Sent ping");
+        //
+        //         tokio::time::sleep(Duration::from_millis(100)).await
+        //     }
+        // });
 
         Ok(())
     }
@@ -297,9 +328,11 @@ where
             .unwrap()
             .into_inner();
 
+        tracing::debug!(id = response.id, "Registered for round");
+
         client
             .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
-                id: response.id,
+                id: response.id.clone(),
                 outputs: vec![Output {
                     address: address.encode()?,
                     amount: total_amount.to_sat(),
@@ -309,13 +342,13 @@ where
             .unwrap();
 
         let response = client
-            .get_event_stream(GetEventStreamRequest {})
+            .ping(PingRequest {
+                payment_id: response.id,
+            })
             .await
             .unwrap();
-        let mut streaming = response.into_inner();
-        while let Some(event) = streaming.next().await {
-            println!("Received new event {event:?}");
-        }
+
+        tracing::debug!(?response, "REceived ping response");
 
         Ok(())
     }
@@ -353,8 +386,9 @@ pub mod tests {
     use regex::Regex;
     use std::collections::HashMap;
     use std::process::Command;
-    use std::sync::Arc;
     use std::sync::Mutex;
+    use std::sync::{Arc, Once};
+    use std::time::Duration;
 
     struct Nigiri {
         utxos: Mutex<HashMap<bitcoin::Address, (OutPoint, Amount)>>,
@@ -439,6 +473,7 @@ pub mod tests {
 
     #[tokio::test]
     pub async fn e2e() {
+        init_tracing();
         let nigiri = Arc::new(Nigiri::new());
 
         let secp = Secp256k1::new();
@@ -456,12 +491,30 @@ pub mod tests {
             .faucet_fund(alice_boarding_address.address, Amount::ONE_BTC)
             .await;
 
-        println!("Boarding output: {boarding_output:?}");
+        tracing::debug!("Boarding output: {boarding_output:?}");
 
         let offchain_balance = alice.offchain_balance().await.unwrap();
 
-        println!("Alice offchain balance: {offchain_balance}");
+        tracing::debug!("Alice offchain balance: {offchain_balance}");
 
         alice.board(&secp, &mut rng).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    }
+
+    pub fn init_tracing() {
+        static TRACING_TEST_SUBSCRIBER: Once = Once::new();
+
+        TRACING_TEST_SUBSCRIBER.call_once(|| {
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    "debug,\
+                 bdk=info,\
+                 tower=info,\
+                 hyper_util=info,\
+                 h2=warn",
+                )
+                .with_test_writer()
+                .init()
+        })
     }
 }

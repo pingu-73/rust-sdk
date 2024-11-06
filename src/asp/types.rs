@@ -1,6 +1,5 @@
 use crate::generated;
 use crate::BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT;
-use crate::BOARDING_REFUND_TIMEOUT;
 use bitcoin::Amount;
 use bitcoin::Network;
 use bitcoin::OutPoint;
@@ -30,7 +29,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
         // let boarding_descriptor = asp_info.boarding_descriptor_template.replace(' ', "");
 
         let boarding_descriptor = BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT
-            .replace("TIMEOUT", &BOARDING_REFUND_TIMEOUT.to_string());
+            .replace("TIMEOUT", value.round_lifetime.to_string().as_str());
         let boarding_descriptor = Descriptor::<String>::from_str(&boarding_descriptor).unwrap();
         let orig_boarding_descriptor = value.boarding_descriptor_template;
 
