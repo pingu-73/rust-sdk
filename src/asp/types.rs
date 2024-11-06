@@ -1,8 +1,11 @@
 use crate::generated;
+use crate::BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT;
+use crate::BOARDING_REFUND_TIMEOUT;
 use bitcoin::Amount;
 use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Txid;
+use miniscript::Descriptor;
 use std::str::FromStr;
 
 #[derive(Clone, Debug)]
@@ -13,7 +16,7 @@ pub struct Info {
     pub round_interval: i64,
     pub network: Network,
     pub dust: Amount,
-    pub boarding_descriptor_template: String,
+    pub boarding_descriptor_template: Descriptor<String>,
     pub vtxo_descriptor_templates: Vec<String>,
     pub forfeit_address: String,
 }
@@ -22,6 +25,15 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
     type Error = crate::Error;
 
     fn try_from(value: generated::ark::v1::GetInfoResponse) -> Result<Self, Self::Error> {
+        // TODO: Use descriptor from ASP when the ASP supports Miniscript.
+        // let boarding_descriptor = asp_info.boarding_descriptor_template.replace(' ', "");
+
+        let boarding_descriptor = BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT
+            .replace("TIMEOUT", &BOARDING_REFUND_TIMEOUT.to_string());
+        let boarding_descriptor = Descriptor::<String>::from_str(&boarding_descriptor).unwrap();
+
+        debug_assert!(boarding_descriptor.sanity_check().is_ok());
+
         Ok(Info {
             pubkey: value.pubkey,
             round_lifetime: value.round_lifetime,
@@ -30,7 +42,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
             network: Network::from_str(value.network.as_str())
                 .map_err(|_| crate::Error::InvalidResponseType)?,
             dust: Amount::from_sat(value.dust as u64),
-            boarding_descriptor_template: value.boarding_descriptor_template,
+            boarding_descriptor_template: boarding_descriptor,
             vtxo_descriptor_templates: value.vtxo_descriptor_templates,
             forfeit_address: value.forfeit_address,
         })

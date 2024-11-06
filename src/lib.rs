@@ -164,14 +164,7 @@ impl Client {
 
         let network = asp_info.network;
 
-        // TODO: Use descriptor from ASP when the ASP supports Miniscript.
-        // let boarding_descriptor = asp_info.boarding_descriptor_template.replace(' ', "");
-
-        let boarding_descriptor = BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT
-            .replace("TIMEOUT", &BOARDING_REFUND_TIMEOUT.to_string());
-        let boarding_descriptor = Descriptor::<String>::from_str(&boarding_descriptor).unwrap();
-
-        debug_assert!(boarding_descriptor.sanity_check().is_ok());
+        let boarding_descriptor = asp_info.boarding_descriptor_template;
 
         let asp_pk: PublicKey = asp_info.pubkey.parse().unwrap();
         let asp_pk = asp_pk.to_x_only_pubkey();
