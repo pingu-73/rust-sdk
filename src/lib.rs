@@ -1,5 +1,4 @@
 use crate::ark_address::ArkAddress;
-use crate::asp::Info;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::Outpoint;
@@ -10,11 +9,9 @@ use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::All;
-use bitcoin::secp256k1::SecretKey;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
-use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 use error::Error;
 use miniscript::translate_hash_fail;
@@ -26,6 +23,7 @@ use rand::CryptoRng;
 use rand::Rng;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 use tonic::codegen::tokio_stream::StreamExt;
 
 pub mod generated {
@@ -49,8 +47,10 @@ pub mod error;
 ///
 /// We use `USER_0` and `USER_1` for the same user key, because `rust-miniscript` does not allow
 /// repeating identifiers.
+/// TODO: fixme: 9d0440=4195485 has been used by ArkD, but doesn't seem to be correct, it should be
+/// 003a09=604672
 const BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT: &str =
-    "tr(UNSPENDABLE_KEY,{and_v(v:pk(USER_0),older(TIMEOUT)),and_v(v:pk(USER_1),pk(ASP))})";
+    "tr(UNSPENDABLE_KEY,{and_v(v:pk(ASP),pk(USER_1)),and_v(v:older(4195485),pk(USER_0))})";
 
 /// The Miniscript descriptor used for the default VTXO.
 ///
@@ -59,17 +59,25 @@ const BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT: &str =
 /// We use `USER_0` and `USER_1` for the same user key, because `rust-miniscript` does not allow
 /// repeating identifiers.
 const DEFAULT_VTXO_DESCRIPTOR_TEMPLATE_MINISCRIPT: &str =
-    "tr(UNSPENDABLE_KEY,{and_v(v:pk(USER_0),older(TIMEOUT)),and_v(v:pk(USER_1),pk(ASP))})";
+    "tr(UNSPENDABLE_KEY,{and_v(v:pk(USER_1),pk(ASP)),and_v(v:older(TIMEOUT),pk(USER_0))})";
 
 const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
 
 const BOARDING_REFUND_TIMEOUT: u64 = 604672;
 
-pub struct Client {
+pub struct Client<B> {
     inner: asp::Client,
     name: String,
     kp: Keypair,
     asp_info: Option<asp::Info>,
+    blockchain: Arc<B>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BoardingAddress {
+    address: Address,
+    descriptor: miniscript::descriptor::Tr<XOnlyPublicKey>,
+    pub ark_descriptor: String,
 }
 
 #[derive(Debug, Clone)]
@@ -78,13 +86,6 @@ pub struct DefaultVtxoScript {
     owner: XOnlyPublicKey,
     exit_delay: u64,
     descriptor: miniscript::descriptor::Tr<XOnlyPublicKey>,
-}
-
-#[derive(Clone, Debug)]
-pub struct BoardingAddress {
-    address: Address,
-    descriptor: miniscript::descriptor::Tr<XOnlyPublicKey>,
-    pub ark_descriptor: String,
 }
 
 impl DefaultVtxoScript {
@@ -123,13 +124,18 @@ impl DefaultVtxoScript {
     }
 }
 
-impl Client {
-    pub fn new<R>(secp: &Secp256k1<All>, rng: &mut R, name: String) -> Self
-    where
-        R: Rng + CryptoRng,
-    {
-        let kp = Keypair::new(secp, rng);
+pub trait Blockchain {
+    fn find_outpoint(
+        &self,
+        address: Address,
+    ) -> impl std::future::Future<Output = Result<(OutPoint, Amount), Error>> + Send;
+}
 
+impl<B> Client<B>
+where
+    B: Blockchain,
+{
+    pub fn new(name: String, kp: Keypair, blockchain: Arc<B>) -> Self {
         let inner = asp::Client::new("http://localhost:7070".to_string());
 
         Self {
@@ -137,6 +143,7 @@ impl Client {
             name,
             kp,
             asp_info: None,
+            blockchain,
         }
     }
 
@@ -204,7 +211,7 @@ impl Client {
 
         let address = real_desc.address(network).unwrap();
 
-        let tr = match real_desc {
+        let tr = match real_desc.clone() {
             Descriptor::Tr(tr) => tr,
             _ => unreachable!("Descriptor must be taproot"),
         };
@@ -246,27 +253,21 @@ impl Client {
     where
         R: Rng + CryptoRng,
     {
-        // TODO: fetch amount from blockchain, for now we use a constant. Make sure this is the same
-        // as used when funding the outpoint
-
         // 1. get all known boarding addresses
         let boarding_addresses = self.get_boarding_addresses()?;
-        // 2. find outpoints for each address
-        let outpoints: Vec<(OutPoint, BoardingAddress)> = vec![(
-            OutPoint {
-                txid: Txid::from_str(
-                    "62f19f4fb35d6f88d9e2830dcf0de484321f9657acbfb7e5c8469ac8ea74054f",
-                )
-                .unwrap(),
-                vout: 0,
-            },
-            boarding_addresses[0].clone(),
-        )]; // TODO: implement me
 
-        let total_amount = Amount::ONE_BTC;
-        for i in outpoints.iter() {
-            // 3. check if outpoint has not expired yet
-            // 4. sum up amount
+        let mut outpoints: Vec<(OutPoint, BoardingAddress)> = vec![];
+        let mut total_amount = Amount::ZERO;
+        // 2. find outpoints for each address
+        for boarding_address in boarding_addresses {
+            let (out_point, amount) = self
+                .blockchain
+                .find_outpoint(boarding_address.address.clone())
+                .await?;
+
+            // 3. TODO: check if outpoint has not expired yet and filter it out
+            outpoints.push((out_point, boarding_address));
+            total_amount += amount;
         }
 
         // 5. get off-chain address and send all funds to this address, no change outpoint 🦄
@@ -284,11 +285,13 @@ impl Client {
                 descriptor: d.ark_descriptor,
             })
             .collect();
+
+        // TODO: move this into our api layer
         let mut client = self.inner.inner.clone().unwrap();
         let response = client
             .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
                 inputs,
-                ephemeral_pubkey: Some(key.public_key().to_x_only_pubkey().to_string()),
+                ephemeral_pubkey: Some(key.public_key().to_string()),
             })
             .await
             .unwrap()
@@ -334,85 +337,124 @@ impl Translator<String, XOnlyPublicKey, ()> for StrPkTranslator {
 
 #[cfg(test)]
 pub mod tests {
+    use crate::error::Error;
+    use crate::Blockchain;
     use crate::Client;
     use bitcoin::hex::FromHex;
+    use bitcoin::key::Keypair;
     use bitcoin::key::Secp256k1;
-    use bitcoin::secp256k1::All;
+    use bitcoin::secp256k1::SecretKey;
     use bitcoin::Address;
     use bitcoin::Amount;
     use bitcoin::OutPoint;
     use bitcoin::Transaction;
     use bitcoin::Txid;
-    use rand::prelude::ThreadRng;
     use rand::thread_rng;
     use regex::Regex;
+    use std::collections::HashMap;
     use std::process::Command;
+    use std::sync::Arc;
+    use std::sync::Mutex;
 
-    async fn setup_client(name: String, secp: &Secp256k1<All>, rng: &mut ThreadRng) -> Client {
-        let mut client = Client::new(secp, rng, name);
+    struct Nigiri {
+        utxos: Mutex<HashMap<bitcoin::Address, (OutPoint, Amount)>>,
+    }
+
+    impl Nigiri {
+        pub fn new() -> Self {
+            Self {
+                utxos: Mutex::new(HashMap::new()),
+            }
+        }
+
+        async fn faucet_fund(&self, address: Address, amount: Amount) -> OutPoint {
+            let res = Command::new("nigiri")
+                .args(["faucet", &address.to_string(), &amount.to_btc().to_string()])
+                .output()
+                .unwrap();
+
+            assert!(res.status.success());
+
+            let text = String::from_utf8(res.stdout).unwrap();
+            let re = Regex::new(r"txId: ([0-9a-fA-F]{64})").unwrap();
+
+            let txid = match re.captures(&text) {
+                Some(captures) => match captures.get(1) {
+                    Some(txid) => txid.as_str(),
+                    _ => panic!("Could not parse TXID"),
+                },
+                None => {
+                    panic!("Could not parse TXID");
+                }
+            };
+
+            let txid: Txid = txid.parse().unwrap();
+
+            let res = Command::new("nigiri")
+                .args(["rpc", "getrawtransaction", &txid.to_string()])
+                .output()
+                .unwrap();
+
+            let tx = String::from_utf8(res.stdout).unwrap();
+
+            let tx = Vec::from_hex(dbg!(tx.trim())).unwrap();
+            let tx: Transaction = bitcoin::consensus::deserialize(&tx).unwrap();
+
+            let (vout, _) = tx
+                .output
+                .iter()
+                .enumerate()
+                .find(|(_, o)| o.script_pubkey == address.script_pubkey())
+                .unwrap();
+
+            let point = OutPoint {
+                txid,
+                vout: vout as u32,
+            };
+            let mut guard = self.utxos.lock().unwrap();
+            guard.insert(address, (point, amount));
+
+            point
+        }
+    }
+
+    impl Blockchain for Nigiri {
+        async fn find_outpoint(
+            &self,
+            address: bitcoin::Address,
+        ) -> Result<(OutPoint, Amount), Error> {
+            let guard = self.utxos.lock().unwrap();
+            let value = guard.get(&address).ok_or(Error::Unknown)?;
+            Ok(value.clone())
+        }
+    }
+
+    async fn setup_client(name: String, kp: Keypair, nigiri: Arc<Nigiri>) -> Client<Nigiri> {
+        let mut client = Client::new(name, kp, nigiri);
 
         client.connect().await.unwrap();
 
         client
     }
 
-    async fn faucet_fund(address: Address, amount: Amount) -> OutPoint {
-        let res = Command::new("nigiri")
-            .args(["faucet", &address.to_string(), &amount.to_btc().to_string()])
-            .output()
-            .unwrap();
-
-        assert!(res.status.success());
-
-        let text = String::from_utf8(res.stdout).unwrap();
-        let re = Regex::new(r"txId: ([0-9a-fA-F]{64})").unwrap();
-
-        let txid = match re.captures(&text) {
-            Some(captures) => match captures.get(1) {
-                Some(txid) => txid.as_str(),
-                _ => panic!("Could not parse TXID"),
-            },
-            None => {
-                panic!("Could not parse TXID");
-            }
-        };
-
-        let txid: Txid = txid.parse().unwrap();
-
-        let res = Command::new("nigiri")
-            .args(["rpc", "getrawtransaction", &txid.to_string()])
-            .output()
-            .unwrap();
-
-        let tx = String::from_utf8(res.stdout).unwrap();
-
-        let tx = Vec::from_hex(dbg!(tx.trim())).unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&tx).unwrap();
-
-        let (vout, _) = tx
-            .output
-            .iter()
-            .enumerate()
-            .find(|(_, o)| o.script_pubkey == address.script_pubkey())
-            .unwrap();
-
-        OutPoint {
-            txid,
-            vout: vout as u32,
-        }
-    }
-
     #[tokio::test]
     pub async fn e2e() {
+        let nigiri = Arc::new(Nigiri::new());
+
         let secp = Secp256k1::new();
         let mut rng = thread_rng();
 
-        let alice = setup_client("alice".to_string(), &secp, &mut rng).await;
+        let key = SecretKey::new(&mut rng);
+        let keypair = Keypair::from_secret_key(&secp, &key);
+
+        let alice = setup_client("alice".to_string(), keypair, nigiri.clone()).await;
 
         // This is just an on-chain address.
         let alice_boarding_address = alice.get_boarding_address().unwrap();
 
-        let boarding_output = faucet_fund(alice_boarding_address.address, Amount::ONE_BTC).await;
+        let boarding_output = nigiri
+            .faucet_fund(alice_boarding_address.address, Amount::ONE_BTC)
+            .await;
 
         println!("Boarding output: {boarding_output:?}");
 

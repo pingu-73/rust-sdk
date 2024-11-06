@@ -2,4 +2,5 @@
 pub enum Error {
     AspNotConnected,
     InvalidResponseType,
+    Unknown,
 }
