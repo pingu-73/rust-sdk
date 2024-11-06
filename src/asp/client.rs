@@ -10,7 +10,7 @@ use tonic::transport::Channel;
 
 pub struct Client {
     url: String,
-    inner: Option<ArkServiceClient<Channel>>,
+    pub inner: Option<ArkServiceClient<Channel>>,
 }
 
 impl Client {

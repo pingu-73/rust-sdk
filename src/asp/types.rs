@@ -19,6 +19,7 @@ pub struct Info {
     pub boarding_descriptor_template: Descriptor<String>,
     pub vtxo_descriptor_templates: Vec<String>,
     pub forfeit_address: String,
+    pub orig_boarding_descriptor: String,
 }
 
 impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
@@ -31,6 +32,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
         let boarding_descriptor = BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT
             .replace("TIMEOUT", &BOARDING_REFUND_TIMEOUT.to_string());
         let boarding_descriptor = Descriptor::<String>::from_str(&boarding_descriptor).unwrap();
+        let orig_boarding_descriptor = value.boarding_descriptor_template;
 
         debug_assert!(boarding_descriptor.sanity_check().is_ok());
 
@@ -45,6 +47,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
             boarding_descriptor_template: boarding_descriptor,
             vtxo_descriptor_templates: value.vtxo_descriptor_templates,
             forfeit_address: value.forfeit_address,
+            orig_boarding_descriptor,
         })
     }
 }

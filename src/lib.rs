@@ -1,11 +1,20 @@
 use crate::ark_address::ArkAddress;
+use crate::asp::Info;
+use crate::generated::ark::v1::GetEventStreamRequest;
+use crate::generated::ark::v1::Input;
+use crate::generated::ark::v1::Outpoint;
+use crate::generated::ark::v1::Output;
+use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
+use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::All;
+use bitcoin::secp256k1::SecretKey;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
+use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 use error::Error;
 use miniscript::translate_hash_fail;
@@ -17,6 +26,7 @@ use rand::CryptoRng;
 use rand::Rng;
 use std::collections::HashMap;
 use std::str::FromStr;
+use tonic::codegen::tokio_stream::StreamExt;
 
 pub mod generated {
     #[path = ""]
@@ -70,6 +80,13 @@ pub struct DefaultVtxoScript {
     descriptor: miniscript::descriptor::Tr<XOnlyPublicKey>,
 }
 
+#[derive(Clone, Debug)]
+pub struct BoardingAddress {
+    address: Address,
+    descriptor: miniscript::descriptor::Tr<XOnlyPublicKey>,
+    pub ark_descriptor: String,
+}
+
 impl DefaultVtxoScript {
     pub fn new(asp: XOnlyPublicKey, owner: XOnlyPublicKey, exit_delay: u64) -> Result<Self, Error> {
         let vtxo_descriptor =
@@ -107,11 +124,11 @@ impl DefaultVtxoScript {
 }
 
 impl Client {
-    pub fn new<R>(secp: Secp256k1<All>, rng: &mut R, name: String) -> Self
+    pub fn new<R>(secp: &Secp256k1<All>, rng: &mut R, name: String) -> Self
     where
         R: Rng + CryptoRng,
     {
-        let kp = Keypair::new(&secp, rng);
+        let kp = Keypair::new(secp, rng);
 
         let inner = asp::Client::new("http://localhost:7070".to_string());
 
@@ -159,7 +176,7 @@ impl Client {
         Ok(vec![address])
     }
 
-    fn new_boarding_address(&self) -> Result<Address, Error> {
+    fn get_boarding_address(&self) -> Result<BoardingAddress, Error> {
         let asp_info = self.asp_info.clone().unwrap();
 
         let network = asp_info.network;
@@ -187,7 +204,24 @@ impl Client {
 
         let address = real_desc.address(network).unwrap();
 
-        Ok(address)
+        let tr = match real_desc {
+            Descriptor::Tr(tr) => tr,
+            _ => unreachable!("Descriptor must be taproot"),
+        };
+
+        let ark_descriptor = asp_info
+            .orig_boarding_descriptor
+            .replace("USER", our_pk.to_string().as_str());
+        Ok(BoardingAddress {
+            address,
+            descriptor: tr,
+            ark_descriptor,
+        })
+    }
+
+    fn get_boarding_addresses(&self) -> Result<Vec<BoardingAddress>, Error> {
+        let address = self.get_boarding_address()?;
+        Ok(vec![address])
     }
 
     async fn offchain_balance(&self) -> Result<Amount, Error> {
@@ -208,8 +242,79 @@ impl Client {
         Ok(total)
     }
 
-    fn board(&self, outpoint: OutPoint) -> Result<(), Error> {
-        todo!()
+    async fn board<R>(&self, secp: &Secp256k1<All>, rng: &mut R) -> Result<(), Error>
+    where
+        R: Rng + CryptoRng,
+    {
+        // TODO: fetch amount from blockchain, for now we use a constant. Make sure this is the same
+        // as used when funding the outpoint
+
+        // 1. get all known boarding addresses
+        let boarding_addresses = self.get_boarding_addresses()?;
+        // 2. find outpoints for each address
+        let outpoints: Vec<(OutPoint, BoardingAddress)> = vec![(
+            OutPoint {
+                txid: Txid::from_str(
+                    "62f19f4fb35d6f88d9e2830dcf0de484321f9657acbfb7e5c8469ac8ea74054f",
+                )
+                .unwrap(),
+                vout: 0,
+            },
+            boarding_addresses[0].clone(),
+        )]; // TODO: implement me
+
+        let total_amount = Amount::ONE_BTC;
+        for i in outpoints.iter() {
+            // 3. check if outpoint has not expired yet
+            // 4. sum up amount
+        }
+
+        // 5. get off-chain address and send all funds to this address, no change outpoint 🦄
+        let address = self.get_offchain_address()?;
+
+        // 6. get ephemeral key
+        let key = Keypair::new(secp, rng);
+        let inputs = outpoints
+            .into_iter()
+            .map(|(o, d)| Input {
+                outpoint: Some(Outpoint {
+                    txid: o.txid.to_string(),
+                    vout: o.vout,
+                }),
+                descriptor: d.ark_descriptor,
+            })
+            .collect();
+        let mut client = self.inner.inner.clone().unwrap();
+        let response = client
+            .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
+                inputs,
+                ephemeral_pubkey: Some(key.public_key().to_x_only_pubkey().to_string()),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+
+        client
+            .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
+                id: response.id,
+                outputs: vec![Output {
+                    address: address.encode()?,
+                    amount: total_amount.to_sat(),
+                }],
+            })
+            .await
+            .unwrap();
+
+        let response = client
+            .get_event_stream(GetEventStreamRequest {})
+            .await
+            .unwrap();
+        let mut streaming = response.into_inner();
+        while let Some(event) = streaming.next().await {
+            println!("Received new event {event:?}");
+        }
+
+        Ok(())
     }
 }
 
@@ -232,19 +337,19 @@ pub mod tests {
     use crate::Client;
     use bitcoin::hex::FromHex;
     use bitcoin::key::Secp256k1;
+    use bitcoin::secp256k1::All;
     use bitcoin::Address;
     use bitcoin::Amount;
     use bitcoin::OutPoint;
     use bitcoin::Transaction;
     use bitcoin::Txid;
+    use rand::prelude::ThreadRng;
     use rand::thread_rng;
     use regex::Regex;
     use std::process::Command;
 
-    async fn setup_client(name: String) -> Client {
-        let secp = Secp256k1::new();
-        let mut rng = thread_rng();
-        let mut client = Client::new(secp, &mut rng, name);
+    async fn setup_client(name: String, secp: &Secp256k1<All>, rng: &mut ThreadRng) -> Client {
+        let mut client = Client::new(secp, rng, name);
 
         client.connect().await.unwrap();
 
@@ -299,17 +404,22 @@ pub mod tests {
 
     #[tokio::test]
     pub async fn e2e() {
-        let alice = setup_client("alice".to_string()).await;
+        let secp = Secp256k1::new();
+        let mut rng = thread_rng();
+
+        let alice = setup_client("alice".to_string(), &secp, &mut rng).await;
 
         // This is just an on-chain address.
-        let alice_boarding_address = alice.new_boarding_address().unwrap();
+        let alice_boarding_address = alice.get_boarding_address().unwrap();
 
-        let boarding_output = faucet_fund(alice_boarding_address, Amount::ONE_BTC).await;
+        let boarding_output = faucet_fund(alice_boarding_address.address, Amount::ONE_BTC).await;
 
         println!("Boarding output: {boarding_output:?}");
 
         let offchain_balance = alice.offchain_balance().await.unwrap();
 
         println!("Alice offchain balance: {offchain_balance}");
+
+        alice.board(&secp, &mut rng).await.unwrap();
     }
 }
