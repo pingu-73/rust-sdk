@@ -215,10 +215,6 @@ impl Client {
         Ok(total)
     }
 
-    fn new_offchain_address(&self) -> Result<ArkAddress, Error> {
-        todo!()
-    }
-
     fn board(&self, outpoint: OutPoint) -> Result<(), Error> {
         todo!()
     }
