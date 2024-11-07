@@ -22,6 +22,16 @@ clarkd-setup:
 
     echo "Started clarkd"
 
+    just clarkd-init
+
+    just clarkd-fund
+
+# Init clarkd
+clarkd-init:
+    #!/usr/bin/env bash
+
+    set -euxo pipefail
+
     seed=$(curl -s http://localhost:7070/v1/admin/wallet/seed | jq .seed -r)
 
     curl -s --data-binary '{"seed": "$seed", "password": "password"}' -H "Content-Type: application/json" http://localhost:7070/v1/admin/wallet/create
@@ -34,9 +44,8 @@ clarkd-setup:
 
     just _wait-until-clarkd-wallet-is-ready
 
-    just fund-clarkd
-
-fund-clarkd:
+# Fund clarkd's ASP wallet
+clarkd-fund:
     #!/usr/bin/env bash
 
     set -euxo pipefail
