@@ -17,6 +17,7 @@ tokio = { version = "1.41.0", features = ["full"] }
 tonic = "0.12.3"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "env-filter", "time", "tracing-log", "json"] }
+secp256k1_musig = { git = "https://github.com/bonomat/rust-secp256k1.git", branch = "musig2-module", package = "secp256k1"}
 
 [dev-dependencies]
 regex = "*"

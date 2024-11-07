@@ -11,7 +11,7 @@ use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
-use bitcoin::secp256k1::All;
+use bitcoin::secp256k1::{All, PublicKey, SecretKey};
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
@@ -402,6 +402,10 @@ where
                         tracing::info!(round_id = e.id, "Round signing started");
 
                         // TODO: implement signing
+                        let csv_sig_closure = CsvSigClosure {
+                            pubkey: self.asp_info.unwrap().pubkey,
+                            timeout: self.asp_info.unwrap().round_lifetime,
+                        };
 
                         let tree_nonces = "".to_string();
                         client
@@ -463,6 +467,35 @@ where
             }
         }
     }
+}
+
+struct Node {
+    txid: String,
+    tx: String,
+    parent_txid: String,
+    leaf: bool,
+}
+
+struct SignerSession {
+    secret_key: SecretKey, //               *btcec.PrivateKey
+    tree: Vec<Vec<Node>>,  // tree                    tree.CongestionTree
+                           // myNonces                [][]*musig2.Nonces
+                           // keys                    []*btcec.PublicKey
+                           // aggregateNonces         TreeNonces
+                           // scriptRoot              []byte
+                           // roundSharedOutputAmount int64
+                           // prevoutFetcherFactory   func(*psbt.Packet) (txscript.PrevOutputFetcher, error)
+}
+
+impl SignerSession {
+    fn generate_nonces(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+struct CsvSigClosure {
+    pubkey: PublicKey,
+    timeout: i64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
