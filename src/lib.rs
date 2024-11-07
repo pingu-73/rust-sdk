@@ -1,11 +1,13 @@
 use crate::ark_address::ArkAddress;
 use crate::generated::ark::v1::get_event_stream_response;
+use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::Outpoint;
 use crate::generated::ark::v1::Output;
+use crate::generated::ark::v1::PingRequest;
 use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
 use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
-use crate::generated::ark::v1::{GetEventStreamRequest, PingRequest};
+use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
@@ -277,26 +279,25 @@ where
         // Get off-chain address and send all funds to this address, no change output 🦄
         let address = self.get_offchain_address()?;
 
-        tracing::info!(offchain_adress = ?address, ?boarding_outputs, "Attempting to board the ark");
+        tracing::info!(offchain_adress = ?address.encode(), ?boarding_outputs, "Attempting to board the ark");
 
         // Joining a round is likely to fail depending on the timing, so we keep retrying.
         //
         // TODO: Consider not retrying on all errors.
-        loop {
+        let txid = loop {
             match self
                 .join_next_ark_round(secp, rng, boarding_outputs.clone(), address, total_amount)
                 .await
             {
-                Ok(()) => {
-                    break;
+                Ok(txid) => {
+                    break txid;
                 }
                 Err(e) => {
                     tracing::error!("Failed to join the round: {e:?}. Retrying");
                 }
             }
-        }
-
-        tracing::info!("Boarding success");
+        };
+        tracing::info!(txid, "Boarding success");
 
         Ok(())
     }
@@ -308,7 +309,8 @@ where
         outpoints: Vec<(OutPoint, BoardingAddress)>,
         address: ArkAddress,
         total_amount: Amount,
-    ) -> Result<(), Error>
+    ) -> Result<String, Error>
+    // TODO: type the return type to TXID
     where
         R: Rng + CryptoRng,
     {
@@ -358,11 +360,12 @@ where
         // are still interested in joining the round.
         let (ping_task, _ping_handle) = {
             let mut client = client.clone();
+            let round_id = register_inputs_for_next_round_id.clone();
             async move {
                 loop {
                     let response = client
                         .ping(PingRequest {
-                            payment_id: register_inputs_for_next_round_id.clone(),
+                            payment_id: round_id.clone(),
                         })
                         .await
                         .unwrap();
@@ -384,26 +387,69 @@ where
             .map_err(|_| Error::Unknown)?;
         let mut stream = response.into_inner();
 
+        let mut step = RoundStep::Start;
+        let registered_round_id = register_inputs_for_next_round_id;
         loop {
             match stream.next().await {
                 Some(Ok(res)) => match res.event {
                     None => {
                         tracing::debug!("Got empty message");
                     }
-                    Some(get_event_stream_response::Event::RoundFinalization(e)) => {
-                        tracing::debug!("Got message: {e:?}");
-                    }
-                    Some(get_event_stream_response::Event::RoundFailed(e)) => {
-                        tracing::debug!("Got message: {e:?}");
-                    }
-                    Some(get_event_stream_response::Event::RoundFinalized(e)) => {
-                        tracing::debug!("Got message: {e:?}");
-                    }
                     Some(get_event_stream_response::Event::RoundSigning(e)) => {
-                        tracing::debug!("Got message: {e:?}");
+                        if step != RoundStep::Start {
+                            continue;
+                        }
+                        tracing::info!(round_id = e.id, "Round signing started");
+
+                        // TODO: implement signing
+
+                        let tree_nonces = "".to_string();
+                        client
+                            .submit_tree_nonces(SubmitTreeNoncesRequest {
+                                round_id: registered_round_id.clone(),
+                                pubkey: key.public_key().to_string(),
+                                tree_nonces,
+                            })
+                            .await
+                            .unwrap();
+
+                        step = step.next();
+                        continue;
                     }
                     Some(get_event_stream_response::Event::RoundSigningNoncesGenerated(e)) => {
+                        if step != RoundStep::RoundSigningStarted {
+                            continue;
+                        }
+
+                        tracing::debug!(round_id = e.id, "Round combined nonces generated");
+                        // TODO: implement handle round signing nonce generated
+                        step = step.next();
+                    }
+                    Some(get_event_stream_response::Event::RoundFinalization(e)) => {
+                        if step != RoundStep::RoundFinalization {
+                            continue;
+                        }
+                        tracing::debug!("Round finalization started");
+
+                        step = step.next();
+                        // TODO: implement me
+                    }
+                    Some(get_event_stream_response::Event::RoundFinalized(e)) => {
+                        tracing::info!(round_id = e.id, txid = e.round_txid, "Round finalized");
+                        return Ok(e.round_txid);
+                    }
+                    Some(get_event_stream_response::Event::RoundFailed(e)) => {
+                        if &e.id == &registered_round_id {
+                            tracing::error!(
+                                round_id = e.id,
+                                reason = e.reason,
+                                "Failed registering in round"
+                            );
+                            // TODO: return a different error
+                            return Err(Error::Unknown);
+                        }
                         tracing::debug!("Got message: {e:?}");
+                        continue;
                     }
                 },
                 Some(Err(e)) => {
@@ -415,6 +461,27 @@ where
                     return Err(Error::Unknown);
                 }
             }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RoundStep {
+    Start,
+    RoundSigningStarted,
+    RoundSigningNoncesGenerated,
+    RoundFinalization,
+    Finalized,
+}
+
+impl RoundStep {
+    fn next(&self) -> RoundStep {
+        match self {
+            RoundStep::Start => RoundStep::RoundSigningStarted,
+            RoundStep::RoundSigningStarted => RoundStep::RoundSigningNoncesGenerated,
+            RoundStep::RoundSigningNoncesGenerated => RoundStep::RoundFinalization,
+            RoundStep::RoundFinalization => RoundStep::Finalized,
+            RoundStep::Finalized => RoundStep::Finalized, // we can't go further
         }
     }
 }
@@ -451,8 +518,9 @@ pub mod tests {
     use regex::Regex;
     use std::collections::HashMap;
     use std::process::Command;
+    use std::sync::Arc;
     use std::sync::Mutex;
-    use std::sync::{Arc, Once};
+    use std::sync::Once;
     use std::time::Duration;
 
     struct Nigiri {
