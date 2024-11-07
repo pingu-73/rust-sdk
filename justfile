@@ -34,6 +34,13 @@ clarkd-setup:
 
     just _wait-until-clarkd-wallet-is-ready
 
+    just fund-clarkd
+
+fund-clarkd:
+    #!/usr/bin/env bash
+
+    set -euxo pipefail
+
     address=$(curl -s http://localhost:7070/v1/admin/wallet/address | jq .address -r)
 
     echo "Funding clarkd wallet"
