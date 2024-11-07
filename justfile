@@ -50,11 +50,13 @@ clarkd-fund:
 
     set -euxo pipefail
 
-    address=$(curl -s http://localhost:7070/v1/admin/wallet/address | jq .address -r)
+    for i in {1..10}; do
+        address=$(curl -s http://localhost:7070/v1/admin/wallet/address | jq .address -r)
 
-    echo "Funding clarkd wallet"
+        echo "Funding clarkd wallet (Iteration $i)"
 
-    nigiri faucet "$address" 10
+        nigiri faucet "$address" 10
+    done
 
 # Stop clarkd.
 clarkd-kill:
