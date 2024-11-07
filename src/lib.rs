@@ -1,4 +1,5 @@
 use crate::ark_address::ArkAddress;
+use crate::generated::ark::v1::get_event_stream_response;
 use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::Outpoint;
 use crate::generated::ark::v1::Output;
@@ -253,27 +254,65 @@ where
     where
         R: Rng + CryptoRng,
     {
-        // 1. get all known boarding addresses
+        // Get all known boarding addresses.
         let boarding_addresses = self.get_boarding_addresses()?;
 
-        let mut outpoints: Vec<(OutPoint, BoardingAddress)> = vec![];
+        let mut boarding_outputs: Vec<(OutPoint, BoardingAddress)> = Vec::new();
         let mut total_amount = Amount::ZERO;
-        // 2. find outpoints for each address
+
+        // Find outpoints for each boarding address.
         for boarding_address in boarding_addresses {
-            let (out_point, amount) = self
+            let (outpoint, amount) = self
                 .blockchain
                 .find_outpoint(boarding_address.address.clone())
                 .await?;
 
-            // 3. TODO: check if outpoint has not expired yet and filter it out
-            outpoints.push((out_point, boarding_address));
+            // TODO: Filter out expired outpoints.
+            boarding_outputs.push((outpoint, boarding_address));
             total_amount += amount;
         }
 
-        // 5. get off-chain address and send all funds to this address, no change outpoint 🦄
+        // TODO: Include settlement of VTXOs.
+
+        // Get off-chain address and send all funds to this address, no change output 🦄
         let address = self.get_offchain_address()?;
 
-        // 6. get ephemeral key
+        tracing::info!(offchain_adress = ?address, ?boarding_outputs, "Attempting to board the ark");
+
+        // Joining a round is likely to fail depending on the timing, so we keep retrying.
+        //
+        // TODO: Consider not retrying on all errors.
+        loop {
+            match self
+                .join_next_ark_round(secp, rng, boarding_outputs.clone(), address, total_amount)
+                .await
+            {
+                Ok(()) => {
+                    break;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to join the round: {e:?}. Retrying");
+                }
+            }
+        }
+
+        tracing::info!("Boarding success");
+
+        Ok(())
+    }
+
+    async fn join_next_ark_round<R>(
+        &self,
+        secp: &Secp256k1<All>,
+        rng: &mut R,
+        outpoints: Vec<(OutPoint, BoardingAddress)>,
+        address: ArkAddress,
+        total_amount: Amount,
+    ) -> Result<(), Error>
+    where
+        R: Rng + CryptoRng,
+    {
+        // Generate an ephemeral key.
         let key = Keypair::new(secp, rng);
         let inputs = outpoints
             .into_iter()
@@ -286,15 +325,15 @@ where
             })
             .collect();
 
-        // TODO: move this into our api layer
-        let mut client = self.inner.inner.clone().unwrap();
+        // TODO: Move this into our API layer.
+        let mut client = self.inner.inner.clone().ok_or(Error::Unknown)?;
         let response = client
             .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
                 inputs,
                 ephemeral_pubkey: Some(key.public_key().to_string()),
             })
             .await
-            .unwrap()
+            .map_err(|_| Error::Unknown)?
             .into_inner();
 
         let register_inputs_for_next_round_id = response.id;
@@ -313,9 +352,11 @@ where
                 }],
             })
             .await
-            .unwrap();
+            .map_err(|_| Error::Unknown)?;
 
-        let (ping_task, ping_handle) = {
+        // The protocol expects us to ping the ASP every 5 seconds to let the server know that we
+        // are still interested in joining the round.
+        let (ping_task, _ping_handle) = {
             let mut client = client.clone();
             async move {
                 loop {
@@ -325,9 +366,9 @@ where
                         })
                         .await
                         .unwrap();
-                    tracing::debug!(?response, "Sent ping");
+                    tracing::trace!(?response, "Sent ping");
 
-                    tokio::time::sleep(Duration::from_millis(100)).await
+                    tokio::time::sleep(Duration::from_millis(5000)).await
                 }
             }
         }
@@ -335,25 +376,46 @@ where
 
         tokio::spawn(ping_task);
 
-        tokio::spawn({
-            let mut client = client.clone();
-            let _ping_handle = ping_handle;
-            async move {
-                // TODO: Make sure that this is actually stopping the ping task on drop.
-                let response = client
-                    .get_event_stream(GetEventStreamRequest {})
-                    .await
-                    .unwrap();
+        let mut client = client.clone();
 
-                let mut streaming = response.into_inner();
-                while let Some(event) = streaming.next().await {
-                    tracing::debug!("Received new event {event:?}");
+        let response = client
+            .get_event_stream(GetEventStreamRequest {})
+            .await
+            .map_err(|_| Error::Unknown)?;
+        let mut stream = response.into_inner();
+
+        loop {
+            match stream.next().await {
+                Some(Ok(res)) => match res.event {
+                    None => {
+                        tracing::debug!("Got empty message");
+                    }
+                    Some(get_event_stream_response::Event::RoundFinalization(e)) => {
+                        tracing::debug!("Got message: {e:?}");
+                    }
+                    Some(get_event_stream_response::Event::RoundFailed(e)) => {
+                        tracing::debug!("Got message: {e:?}");
+                    }
+                    Some(get_event_stream_response::Event::RoundFinalized(e)) => {
+                        tracing::debug!("Got message: {e:?}");
+                    }
+                    Some(get_event_stream_response::Event::RoundSigning(e)) => {
+                        tracing::debug!("Got message: {e:?}");
+                    }
+                    Some(get_event_stream_response::Event::RoundSigningNoncesGenerated(e)) => {
+                        tracing::debug!("Got message: {e:?}");
+                    }
+                },
+                Some(Err(e)) => {
+                    tracing::error!("Got error from round event stream: {e:?}");
+                    return Err(Error::Unknown);
                 }
-                tracing::info!("Round event stream terminated");
+                None => {
+                    tracing::error!("Dropped to round event stream");
+                    return Err(Error::Unknown);
+                }
             }
-        });
-
-        Ok(())
+        }
     }
 }
 
@@ -434,7 +496,7 @@ pub mod tests {
 
             let tx = String::from_utf8(res.stdout).unwrap();
 
-            let tx = Vec::from_hex(dbg!(tx.trim())).unwrap();
+            let tx = Vec::from_hex(tx.trim()).unwrap();
             let tx: Transaction = bitcoin::consensus::deserialize(&tx).unwrap();
 
             let (vout, _) = tx

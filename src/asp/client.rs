@@ -30,7 +30,7 @@ impl Client {
 
         let response = inner.get_info(GetInfoRequest {}).await.unwrap();
 
-        Ok(response.into_inner().try_into()?)
+        response.into_inner().try_into()
     }
 
     pub async fn list_vtxos(&self, address: ArkAddress) -> Result<ListVtxo, Error> {
