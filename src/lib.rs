@@ -14,6 +14,7 @@ use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::XOnlyPublicKey;
 use error::Error;
+use futures::FutureExt;
 use miniscript::translate_hash_fail;
 use miniscript::Descriptor;
 use miniscript::ToPublicKey;
@@ -151,38 +152,6 @@ where
         let info = self.inner.get_info().await?;
 
         self.asp_info = Some(info);
-
-        let mut client = self.inner.inner.clone().unwrap();
-
-        tokio::spawn({
-            let mut client = client.clone();
-            async move {
-                let response = client
-                    .get_event_stream(GetEventStreamRequest {})
-                    .await
-                    .unwrap();
-
-                let mut streaming = response.into_inner();
-                while let Some(event) = streaming.next().await {
-                    tracing::debug!("Received new event {event:?}");
-                }
-                tracing::error!("Event stream terminated");
-            }
-        });
-
-        // tokio::spawn(async move {
-        //     loop {
-        //         let response = client
-        //             .ping(PingRequest {
-        //                 payment_id: "WTF".to_string(),
-        //             })
-        //             .await
-        //             .unwrap();
-        //         tracing::debug!(?response, "Sent ping");
-        //
-        //         tokio::time::sleep(Duration::from_millis(100)).await
-        //     }
-        // });
 
         Ok(())
     }
@@ -328,11 +297,16 @@ where
             .unwrap()
             .into_inner();
 
-        tracing::debug!(id = response.id, "Registered for round");
+        let register_inputs_for_next_round_id = response.id;
+
+        tracing::debug!(
+            id = register_inputs_for_next_round_id,
+            "Registered for round"
+        );
 
         client
             .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
-                id: response.id.clone(),
+                id: register_inputs_for_next_round_id.clone(),
                 outputs: vec![Output {
                     address: address.encode()?,
                     amount: total_amount.to_sat(),
@@ -341,14 +315,43 @@ where
             .await
             .unwrap();
 
-        let response = client
-            .ping(PingRequest {
-                payment_id: response.id,
-            })
-            .await
-            .unwrap();
+        let (ping_task, ping_handle) = {
+            let mut client = client.clone();
+            async move {
+                loop {
+                    let response = client
+                        .ping(PingRequest {
+                            payment_id: register_inputs_for_next_round_id.clone(),
+                        })
+                        .await
+                        .unwrap();
+                    tracing::debug!(?response, "Sent ping");
 
-        tracing::debug!(?response, "REceived ping response");
+                    tokio::time::sleep(Duration::from_millis(100)).await
+                }
+            }
+        }
+        .remote_handle();
+
+        tokio::spawn(ping_task);
+
+        tokio::spawn({
+            let mut client = client.clone();
+            let _ping_handle = ping_handle;
+            async move {
+                // TODO: Make sure that this is actually stopping the ping task on drop.
+                let response = client
+                    .get_event_stream(GetEventStreamRequest {})
+                    .await
+                    .unwrap();
+
+                let mut streaming = response.into_inner();
+                while let Some(event) = streaming.next().await {
+                    tracing::debug!("Received new event {event:?}");
+                }
+                tracing::info!("Round event stream terminated");
+            }
+        });
 
         Ok(())
     }
@@ -459,7 +462,7 @@ pub mod tests {
         ) -> Result<(OutPoint, Amount), Error> {
             let guard = self.utxos.lock().unwrap();
             let value = guard.get(&address).ok_or(Error::Unknown)?;
-            Ok(value.clone())
+            Ok(*value)
         }
     }
 
@@ -484,7 +487,6 @@ pub mod tests {
 
         let alice = setup_client("alice".to_string(), keypair, nigiri.clone()).await;
 
-        // This is just an on-chain address.
         let alice_boarding_address = alice.get_boarding_address().unwrap();
 
         let boarding_output = nigiri
@@ -498,7 +500,7 @@ pub mod tests {
         tracing::debug!("Alice offchain balance: {offchain_balance}");
 
         alice.board(&secp, &mut rng).await.unwrap();
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        tokio::time::sleep(Duration::from_secs(60)).await;
     }
 
     pub fn init_tracing() {

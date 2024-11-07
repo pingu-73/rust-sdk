@@ -15,10 +15,10 @@ clarkd-setup:
     #!/usr/bin/env bash
 
     set -euxo pipefail
-    #
-    #    docker compose -f $CLARKD_COMPOSE_FILE up -d --build
-    #
-    #    just _wait-until-clarkd-is-ready
+
+    docker compose -f $CLARKD_COMPOSE_FILE up -d --build
+
+    just _wait-until-clarkd-is-ready
 
     echo "Started clarkd"
 
