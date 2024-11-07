@@ -11,7 +11,7 @@ use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
-use bitcoin::secp256k1::{All, PublicKey, SecretKey};
+use bitcoin::secp256k1::{All, SecretKey};
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
@@ -25,6 +25,8 @@ use miniscript::TranslatePk;
 use miniscript::Translator;
 use rand::CryptoRng;
 use rand::Rng;
+use secp256k1_zkp::MusigPubNonce;
+use secp256k1_zkp::MusigSecNonce;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -387,6 +389,8 @@ where
             .map_err(|_| Error::Unknown)?;
         let mut stream = response.into_inner();
 
+        let asp_info = self.asp_info.clone().unwrap();
+
         let mut step = RoundStep::Start;
         let registered_round_id = register_inputs_for_next_round_id;
         loop {
@@ -403,8 +407,9 @@ where
 
                         // TODO: implement signing
                         let csv_sig_closure = CsvSigClosure {
-                            pubkey: self.asp_info.unwrap().pubkey,
-                            timeout: self.asp_info.unwrap().round_lifetime,
+                            pubkey: PublicKey::from_str(&asp_info.pubkey)
+                                .map_err(|_| Error::Unknown)?,
+                            timeout: asp_info.round_lifetime,
                         };
 
                         let tree_nonces = "".to_string();
@@ -476,15 +481,23 @@ struct Node {
     leaf: bool,
 }
 
+// Not sure about any of this.
+struct Nonces {
+    public: MusigPubNonce,
+    secret: MusigSecNonce,
+}
+
 struct SignerSession {
     secret_key: SecretKey, //               *btcec.PrivateKey
     tree: Vec<Vec<Node>>,  // tree                    tree.CongestionTree
-                           // myNonces                [][]*musig2.Nonces
-                           // keys                    []*btcec.PublicKey
-                           // aggregateNonces         TreeNonces
-                           // scriptRoot              []byte
-                           // roundSharedOutputAmount int64
-                           // prevoutFetcherFactory   func(*psbt.Packet) (txscript.PrevOutputFetcher, error)
+    my_nonces: Vec<Vec<Nonces>>,
+    keys: Vec<PublicKey>,
+    // Wrong type `MusigPubNonce`, apparently it's just a String.
+    aggregate_nonces: Vec<Vec<MusigPubNonce>>,
+    // Tap hash.
+    script_root: [u8; 32],
+    round_shared_output_amount: Amount,
+    // prevoutFetcherFactory   func(*psbt.Packet) (txscript.PrevOutputFetcher, error)
 }
 
 impl SignerSession {
