@@ -8,10 +8,14 @@ use crate::generated::ark::v1::PingRequest;
 use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
 use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
+use crate::generated::ark::v1::Tree;
+use crate::musig::to_zkp_pk;
+use bitcoin::hex::DisplayHex;
+use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
-use bitcoin::secp256k1::{All, SecretKey};
+use bitcoin::secp256k1::All;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
@@ -25,13 +29,19 @@ use miniscript::TranslatePk;
 use miniscript::Translator;
 use rand::CryptoRng;
 use rand::Rng;
-use secp256k1_zkp::MusigPubNonce;
-use secp256k1_zkp::MusigSecNonce;
 use std::collections::HashMap;
+use std::io::Cursor;
+use std::io::Read;
+use std::io::Write;
+use std::io::{self};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codegen::tokio_stream::StreamExt;
+use zkp::new_musig_nonce_pair;
+use zkp::MusigPubNonce;
+use zkp::MusigSecNonce;
+use zkp::MusigSessionId;
 
 pub mod generated {
     #[path = ""]
@@ -41,9 +51,12 @@ pub mod generated {
     }
 }
 
+// TODO: Reconsider whether these should be public or not.
 pub mod ark_address;
-mod asp;
+pub mod asp;
 pub mod error;
+pub mod musig;
+pub mod script;
 
 // TODO: Figure out how to integrate on-chain wallet. Probably use a trait and implement using
 // `bdk`.
@@ -72,25 +85,25 @@ const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d
 
 pub struct Client<B> {
     inner: asp::Client,
-    name: String,
-    kp: Keypair,
-    asp_info: Option<asp::Info>,
+    pub name: String,
+    pub kp: Keypair,
+    pub asp_info: Option<asp::Info>,
     blockchain: Arc<B>,
 }
 
 #[derive(Clone, Debug)]
 pub struct BoardingAddress {
-    address: Address,
-    descriptor: miniscript::descriptor::Tr<XOnlyPublicKey>,
+    pub address: Address,
+    pub descriptor: miniscript::descriptor::Tr<XOnlyPublicKey>,
     pub ark_descriptor: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct DefaultVtxoScript {
-    asp: XOnlyPublicKey,
-    owner: XOnlyPublicKey,
-    exit_delay: u64,
-    descriptor: miniscript::descriptor::Tr<XOnlyPublicKey>,
+    pub asp: XOnlyPublicKey,
+    pub owner: XOnlyPublicKey,
+    pub exit_delay: u64,
+    pub descriptor: miniscript::descriptor::Tr<XOnlyPublicKey>,
 }
 
 impl DefaultVtxoScript {
@@ -162,7 +175,7 @@ where
     }
 
     // At the moment we are always generating the same address.
-    fn get_offchain_address(&self) -> Result<ArkAddress, Error> {
+    pub fn get_offchain_address(&self) -> Result<ArkAddress, Error> {
         let asp_info = self.asp_info.clone().unwrap();
 
         let asp: PublicKey = asp_info.pubkey.parse().unwrap();
@@ -182,13 +195,13 @@ where
         Ok(ark_address)
     }
 
-    fn get_offchain_addresses(&self) -> Result<Vec<ArkAddress>, Error> {
+    pub fn get_offchain_addresses(&self) -> Result<Vec<ArkAddress>, Error> {
         let address = self.get_offchain_address().unwrap();
 
         Ok(vec![address])
     }
 
-    fn get_boarding_address(&self) -> Result<BoardingAddress, Error> {
+    pub fn get_boarding_address(&self) -> Result<BoardingAddress, Error> {
         let asp_info = self.asp_info.clone().unwrap();
 
         let network = asp_info.network;
@@ -231,12 +244,12 @@ where
         })
     }
 
-    fn get_boarding_addresses(&self) -> Result<Vec<BoardingAddress>, Error> {
+    pub fn get_boarding_addresses(&self) -> Result<Vec<BoardingAddress>, Error> {
         let address = self.get_boarding_address()?;
         Ok(vec![address])
     }
 
-    async fn offchain_balance(&self) -> Result<Amount, Error> {
+    pub async fn offchain_balance(&self) -> Result<Amount, Error> {
         let addresses: Vec<ArkAddress> = self.get_offchain_addresses()?;
 
         let mut total = Amount::ZERO;
@@ -254,7 +267,7 @@ where
         Ok(total)
     }
 
-    async fn board<R>(&self, secp: &Secp256k1<All>, rng: &mut R) -> Result<(), Error>
+    pub async fn board<R>(&self, secp: &Secp256k1<All>, rng: &mut R) -> Result<(), Error>
     where
         R: Rng + CryptoRng,
     {
@@ -317,7 +330,7 @@ where
         R: Rng + CryptoRng,
     {
         // Generate an ephemeral key.
-        let key = Keypair::new(secp, rng);
+        let ephemeral_kp = Keypair::new(secp, rng);
         let inputs = outpoints
             .into_iter()
             .map(|(o, d)| Input {
@@ -334,7 +347,7 @@ where
         let response = client
             .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
                 inputs,
-                ephemeral_pubkey: Some(key.public_key().to_string()),
+                ephemeral_pubkey: Some(ephemeral_kp.public_key().to_string()),
             })
             .await
             .map_err(|_| Error::Unknown)?
@@ -389,78 +402,124 @@ where
             .map_err(|_| Error::Unknown)?;
         let mut stream = response.into_inner();
 
-        let asp_info = self.asp_info.clone().unwrap();
-
         let mut step = RoundStep::Start;
         let registered_round_id = register_inputs_for_next_round_id;
+
+        let mut vtxo_tree: Option<Tree> = None;
         loop {
             match stream.next().await {
-                Some(Ok(res)) => match res.event {
-                    None => {
-                        tracing::debug!("Got empty message");
-                    }
-                    Some(get_event_stream_response::Event::RoundSigning(e)) => {
-                        if step != RoundStep::Start {
+                Some(Ok(res)) => {
+                    match res.event {
+                        None => {
+                            tracing::debug!("Got empty message");
+                        }
+                        Some(get_event_stream_response::Event::RoundSigning(e)) => {
+                            if step != RoundStep::Start {
+                                continue;
+                            }
+                            tracing::info!(round_id = e.id, "Round signing started");
+
+                            let unsigned_vtxo_tree = e
+                                .unsigned_vtxo_tree
+                                .expect("we think this should always be some");
+
+                            let secp_zkp = zkp::Secp256k1::new();
+
+                            let mut nonce_tree: Vec<Vec<(MusigSecNonce, MusigPubNonce)>> =
+                                Vec::new();
+                            for level in unsigned_vtxo_tree.levels.iter() {
+                                let mut nonces_level = vec![];
+                                for _ in level.nodes.iter() {
+                                    // TODO: Not sure if we want to generate a new session ID per
+                                    // node in the VTXO tree.
+                                    let alice_session_id = MusigSessionId::new(rng);
+                                    let extra_rand = rng.gen();
+                                    let (nonce_sk, nonce_pk) = new_musig_nonce_pair(
+                                        &secp_zkp,
+                                        alice_session_id,
+                                        None,
+                                        // Some(to_zkp_kp(&secp_zkp, &alice_kp).secret_key()),
+                                        None,
+                                        to_zkp_pk(ephemeral_kp.public_key()),
+                                        None,
+                                        Some(extra_rand),
+                                    )
+                                    .unwrap();
+
+                                    nonces_level.push((nonce_sk, nonce_pk));
+                                }
+                                nonce_tree.push(nonces_level);
+                            }
+
+                            let nonce_tree = encode_nonce_tree(nonce_tree).unwrap();
+
+                            client
+                                .submit_tree_nonces(SubmitTreeNoncesRequest {
+                                    round_id: e.id,
+                                    pubkey: ephemeral_kp.public_key().to_string(),
+                                    tree_nonces: nonce_tree.to_lower_hex_string(),
+                                })
+                                .await
+                                .unwrap();
+
+                            vtxo_tree = Some(unsigned_vtxo_tree);
+
+                            step = step.next();
                             continue;
                         }
-                        tracing::info!(round_id = e.id, "Round signing started");
+                        Some(get_event_stream_response::Event::RoundSigningNoncesGenerated(e)) => {
+                            if step != RoundStep::RoundSigningStarted {
+                                continue;
+                            }
 
-                        // TODO: implement signing
-                        let csv_sig_closure = CsvSigClosure {
-                            pubkey: PublicKey::from_str(&asp_info.pubkey)
-                                .map_err(|_| Error::Unknown)?,
-                            timeout: asp_info.round_lifetime,
-                        };
+                            let nonce_tree = decode_nonce_tree(e.tree_nonces).unwrap();
 
-                        let tree_nonces = "".to_string();
-                        client
-                            .submit_tree_nonces(SubmitTreeNoncesRequest {
-                                round_id: registered_round_id.clone(),
-                                pubkey: key.public_key().to_string(),
-                                tree_nonces,
-                            })
-                            .await
-                            .unwrap();
-
-                        step = step.next();
-                        continue;
-                    }
-                    Some(get_event_stream_response::Event::RoundSigningNoncesGenerated(e)) => {
-                        if step != RoundStep::RoundSigningStarted {
-                            continue;
-                        }
-
-                        tracing::debug!(round_id = e.id, "Round combined nonces generated");
-                        // TODO: implement handle round signing nonce generated
-                        step = step.next();
-                    }
-                    Some(get_event_stream_response::Event::RoundFinalization(e)) => {
-                        if step != RoundStep::RoundFinalization {
-                            continue;
-                        }
-                        tracing::debug!("Round finalization started");
-
-                        step = step.next();
-                        // TODO: implement me
-                    }
-                    Some(get_event_stream_response::Event::RoundFinalized(e)) => {
-                        tracing::info!(round_id = e.id, txid = e.round_txid, "Round finalized");
-                        return Ok(e.round_txid);
-                    }
-                    Some(get_event_stream_response::Event::RoundFailed(e)) => {
-                        if &e.id == &registered_round_id {
-                            tracing::error!(
+                            tracing::debug!(
                                 round_id = e.id,
-                                reason = e.reason,
-                                "Failed registering in round"
+                                ?nonce_tree,
+                                "Round combined nonces generated"
                             );
-                            // TODO: return a different error
-                            return Err(Error::Unknown);
+
+                            let vtxo_tree = vtxo_tree.clone().expect("To have received it");
+
+                            for (i, level) in vtxo_tree.levels.iter().enumerate() {
+                                for (j, node) in level.nodes.iter().enumerate() {
+                                    tracing::debug!(i, j, ?node, "Generating partial signature");
+                                    // MusigSession::new(todo!(), todo!(), todo!(), todo!())
+                                    //     .partial_sign(todo!(), todo!(), todo!(), todo!());
+                                }
+                            }
+
+                            step = step.next();
                         }
-                        tracing::debug!("Got message: {e:?}");
-                        continue;
+                        Some(get_event_stream_response::Event::RoundFinalization(e)) => {
+                            if step != RoundStep::RoundFinalization {
+                                continue;
+                            }
+                            tracing::debug!(?e, "Round finalization started");
+
+                            step = step.next();
+                            // TODO: implement me
+                        }
+                        Some(get_event_stream_response::Event::RoundFinalized(e)) => {
+                            tracing::info!(round_id = e.id, txid = e.round_txid, "Round finalized");
+                            return Ok(e.round_txid);
+                        }
+                        Some(get_event_stream_response::Event::RoundFailed(e)) => {
+                            if e.id == registered_round_id {
+                                tracing::error!(
+                                    round_id = e.id,
+                                    reason = e.reason,
+                                    "Failed registering in round"
+                                );
+                                // TODO: return a different error
+                                return Err(Error::Unknown);
+                            }
+                            tracing::debug!("Got message: {e:?}");
+                            continue;
+                        }
                     }
-                },
+                }
                 Some(Err(e)) => {
                     tracing::error!("Got error from round event stream: {e:?}");
                     return Err(Error::Unknown);
@@ -472,43 +531,6 @@ where
             }
         }
     }
-}
-
-struct Node {
-    txid: String,
-    tx: String,
-    parent_txid: String,
-    leaf: bool,
-}
-
-// Not sure about any of this.
-struct Nonces {
-    public: MusigPubNonce,
-    secret: MusigSecNonce,
-}
-
-struct SignerSession {
-    secret_key: SecretKey, //               *btcec.PrivateKey
-    tree: Vec<Vec<Node>>,  // tree                    tree.CongestionTree
-    my_nonces: Vec<Vec<Nonces>>,
-    keys: Vec<PublicKey>,
-    // Wrong type `MusigPubNonce`, apparently it's just a String.
-    aggregate_nonces: Vec<Vec<MusigPubNonce>>,
-    // Tap hash.
-    script_root: [u8; 32],
-    round_shared_output_amount: Amount,
-    // prevoutFetcherFactory   func(*psbt.Packet) (txscript.PrevOutputFetcher, error)
-}
-
-impl SignerSession {
-    fn generate_nonces(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-}
-
-struct CsvSigClosure {
-    pubkey: PublicKey,
-    timeout: i64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -546,11 +568,78 @@ impl Translator<String, XOnlyPublicKey, ()> for StrPkTranslator {
     translate_hash_fail!(String, XOnlyPublicKey, ());
 }
 
+const COLUMN_SEPARATOR: u8 = b'|';
+const ROW_SEPARATOR: u8 = b'/';
+
+pub fn encode_nonce_tree(
+    nonce_tree: Vec<Vec<(MusigSecNonce, MusigPubNonce)>>,
+) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+
+    // [[key0], [key1, key2], [key3, key4, key5, key6]]
+    for level in nonce_tree {
+        for (_, pk) in level {
+            buf.write_all(&[COLUMN_SEPARATOR])?;
+
+            buf.write_all(&pk.serialize())?;
+        }
+
+        buf.write_all(&[ROW_SEPARATOR])?;
+    }
+
+    Ok(buf)
+}
+
+pub fn decode_nonce_tree(serialized: String) -> io::Result<Vec<Vec<MusigPubNonce>>> {
+    let mut matrix: Vec<Vec<MusigPubNonce>> = Vec::new();
+    let mut row = Vec::new();
+
+    let bytes = Vec::from_hex(&serialized).unwrap();
+
+    let mut reader = Cursor::new(&bytes);
+
+    // |key0/|key1|key2/|key3|key4|key5|key6/
+    loop {
+        let mut separator = [0u8; 1];
+
+        match reader.read(&mut separator) {
+            Ok(0) => break, // EOF
+            Ok(_) => {
+                let b = separator[0];
+
+                if b == ROW_SEPARATOR {
+                    if !row.is_empty() {
+                        matrix.push(row);
+                        row = Vec::new();
+                    }
+                    continue;
+                }
+
+                let mut pk_buffer = [0u8; 66];
+                reader.read_exact(&mut pk_buffer).unwrap();
+                let pk = MusigPubNonce::from_slice(&pk_buffer).unwrap();
+
+                row.push(pk);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    if !row.is_empty() {
+        matrix.push(row);
+    }
+
+    Ok(matrix)
+}
+
 #[cfg(test)]
 pub mod tests {
+    use crate::decode_nonce_tree;
+    use crate::encode_nonce_tree;
     use crate::error::Error;
     use crate::Blockchain;
     use crate::Client;
+    use bitcoin::hex::DisplayHex;
     use bitcoin::hex::FromHex;
     use bitcoin::key::Keypair;
     use bitcoin::key::Secp256k1;
@@ -568,6 +657,8 @@ pub mod tests {
     use std::sync::Mutex;
     use std::sync::Once;
     use std::time::Duration;
+    use zkp::MusigPubNonce;
+    use zkp::MusigSecNonce;
 
     struct Nigiri {
         utxos: Mutex<HashMap<bitcoin::Address, (OutPoint, Amount)>>,
@@ -648,6 +739,44 @@ pub mod tests {
         client.connect().await.unwrap();
 
         client
+    }
+
+    #[test]
+    fn nonce_tree_round_trip() {
+        let a_bytes = Vec::from_hex("03a2ca7605303774152c9af458c9abdfa5636a8028e7bb91d4e2e6b69b60a7961e02e7d8f8d98e1b8452bec2b8132a49b97b8d3a5e8a71ce6d1b1b5a58d9263ac8dd").unwrap();
+        let b_bytes = Vec::from_hex("021a9d01ba9ef321b512f1368ff426bb8e9a7edf4ae5f0e65691a08eef604acfc7026fc797f4f8a81af2f44aee6084a34227c16656eececa41d550fc1f0f6fe765fd").unwrap();
+        let c_bytes = Vec::from_hex("034b7d66fdff36cf53d5fb86f0548f28d88247bf43292c8c76379c6c3f22a45ffe0298f6843979d3b38bbdc186d30fdf0fc70e1335aa727544af49804b592ada90e8").unwrap();
+
+        let a = (
+            MusigSecNonce::dangerous_from_bytes([1u8; 132]),
+            MusigPubNonce::from_slice(&a_bytes).unwrap(),
+        );
+        let b = (
+            MusigSecNonce::dangerous_from_bytes([2u8; 132]),
+            MusigPubNonce::from_slice(&b_bytes).unwrap(),
+        );
+        let c = (
+            MusigSecNonce::dangerous_from_bytes([3u8; 132]),
+            MusigPubNonce::from_slice(&c_bytes).unwrap(),
+        );
+
+        let nonce_tree = vec![vec![a], vec![b, c]];
+
+        let serialized = encode_nonce_tree(nonce_tree).unwrap().to_lower_hex_string();
+
+        println!("serialized: {serialized}");
+
+        let deserialized = decode_nonce_tree(serialized).unwrap();
+
+        let pub_nonce_tree = vec![
+            vec![MusigPubNonce::from_slice(&a_bytes).unwrap()],
+            vec![
+                MusigPubNonce::from_slice(&b_bytes).unwrap(),
+                MusigPubNonce::from_slice(&c_bytes).unwrap(),
+            ],
+        ];
+
+        assert_eq!(pub_nonce_tree, deserialized);
     }
 
     #[tokio::test]
