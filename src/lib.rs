@@ -8,17 +8,26 @@ use crate::generated::ark::v1::PingRequest;
 use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
 use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
+use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::generated::ark::v1::Tree;
 use crate::musig::to_zkp_pk;
+use base64::Engine;
+use bitcoin::consensus::deserialize;
+use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
 use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::All;
+use bitcoin::sighash::Prevouts;
+use bitcoin::sighash::SighashCache;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
+use bitcoin::Psbt;
+use bitcoin::Transaction;
+use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 use error::Error;
 use futures::FutureExt;
@@ -39,8 +48,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tonic::codegen::tokio_stream::StreamExt;
 use zkp::new_musig_nonce_pair;
+use zkp::Message;
+use zkp::MusigAggNonce;
+use zkp::MusigKeyAggCache;
+use zkp::MusigPartialSignature;
 use zkp::MusigPubNonce;
 use zkp::MusigSecNonce;
+use zkp::MusigSession;
 use zkp::MusigSessionId;
 
 pub mod generated {
@@ -82,6 +96,8 @@ const DEFAULT_VTXO_DESCRIPTOR_TEMPLATE_MINISCRIPT: &str =
     "tr(UNSPENDABLE_KEY,{and_v(v:pk(USER_1),pk(ASP)),and_v(v:older(TIMEOUT),pk(USER_0))})";
 
 const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+
+const VTXO_INPUT_INDEX: usize = 0;
 
 pub struct Client<B> {
     inner: asp::Client,
@@ -267,7 +283,12 @@ where
         Ok(total)
     }
 
-    pub async fn board<R>(&self, secp: &Secp256k1<All>, rng: &mut R) -> Result<(), Error>
+    pub async fn board<R>(
+        &self,
+        secp: &Secp256k1<All>,
+        secp_zkp: &zkp::Secp256k1<zkp::All>,
+        rng: &mut R,
+    ) -> Result<(), Error>
     where
         R: Rng + CryptoRng,
     {
@@ -301,7 +322,14 @@ where
         // TODO: Consider not retrying on all errors.
         let txid = loop {
             match self
-                .join_next_ark_round(secp, rng, boarding_outputs.clone(), address, total_amount)
+                .join_next_ark_round(
+                    secp,
+                    secp_zkp,
+                    rng,
+                    boarding_outputs.clone(),
+                    address,
+                    total_amount,
+                )
                 .await
             {
                 Ok(txid) => {
@@ -320,6 +348,7 @@ where
     async fn join_next_ark_round<R>(
         &self,
         secp: &Secp256k1<All>,
+        secp_zkp: &zkp::Secp256k1<zkp::All>,
         rng: &mut R,
         outpoints: Vec<(OutPoint, BoardingAddress)>,
         address: ArkAddress,
@@ -405,7 +434,12 @@ where
         let mut step = RoundStep::Start;
         let registered_round_id = register_inputs_for_next_round_id;
 
+        let mut unsigned_round_tx: Option<Psbt> = None;
         let mut vtxo_tree: Option<Tree> = None;
+        let mut cosigner_pks: Option<Vec<zkp::PublicKey>> = None;
+
+        #[allow(clippy::type_complexity)]
+        let mut our_nonce_tree: Option<Vec<Vec<Option<(MusigSecNonce, MusigPubNonce)>>>> = None;
         loop {
             match stream.next().await {
                 Some(Ok(res)) => {
@@ -425,7 +459,7 @@ where
 
                             let secp_zkp = zkp::Secp256k1::new();
 
-                            let mut nonce_tree: Vec<Vec<(MusigSecNonce, MusigPubNonce)>> =
+                            let mut nonce_tree: Vec<Vec<Option<(MusigSecNonce, MusigPubNonce)>>> =
                                 Vec::new();
                             for level in unsigned_vtxo_tree.levels.iter() {
                                 let mut nonces_level = vec![];
@@ -446,12 +480,24 @@ where
                                     )
                                     .unwrap();
 
-                                    nonces_level.push((nonce_sk, nonce_pk));
+                                    nonces_level.push(Some((nonce_sk, nonce_pk)));
                                 }
                                 nonce_tree.push(nonces_level);
                             }
 
-                            let nonce_tree = encode_nonce_tree(nonce_tree).unwrap();
+                            let pub_nonce_tree = nonce_tree
+                                .iter()
+                                .map(|level| {
+                                    level
+                                        .iter()
+                                        .map(|kp| kp.as_ref().unwrap().1)
+                                        .collect::<Vec<MusigPubNonce>>()
+                                })
+                                .collect();
+
+                            our_nonce_tree = Some(nonce_tree);
+
+                            let nonce_tree = encode_tree(pub_nonce_tree).unwrap();
 
                             client
                                 .submit_tree_nonces(SubmitTreeNoncesRequest {
@@ -463,6 +509,28 @@ where
                                 .unwrap();
 
                             vtxo_tree = Some(unsigned_vtxo_tree);
+
+                            let cosigner_public_keys = e
+                                .cosigners_pubkeys
+                                .into_iter()
+                                .map(|pk| pk.parse().map_err(|_| Error::Unknown))
+                                .collect::<Result<Vec<zkp::PublicKey>, Error>>()
+                                .unwrap();
+
+                            cosigner_pks = Some(cosigner_public_keys);
+
+                            unsigned_round_tx = {
+                                let psbt = base64::engine::GeneralPurpose::new(
+                                    &base64::alphabet::STANDARD,
+                                    base64::engine::GeneralPurposeConfig::new(),
+                                )
+                                .decode(&e.unsigned_round_tx)
+                                .unwrap();
+
+                                let psbt = Psbt::deserialize(&psbt).unwrap();
+
+                                Some(psbt)
+                            };
 
                             step = step.next();
                             continue;
@@ -481,14 +549,107 @@ where
                             );
 
                             let vtxo_tree = vtxo_tree.clone().expect("To have received it");
+                            let cosigner_pks = cosigner_pks.clone().expect("To have received them");
+                            let mut our_nonce_tree =
+                                our_nonce_tree.take().expect("To have generated them");
 
+                            let key_agg_cache =
+                                MusigKeyAggCache::new(secp_zkp, cosigner_pks.as_slice());
+
+                            let ephemeral_kp = zkp::Keypair::from_seckey_slice(
+                                secp_zkp,
+                                &ephemeral_kp.secret_bytes(),
+                            )
+                            .unwrap();
+
+                            let mut sig_tree: Vec<Vec<MusigPartialSignature>> = Vec::new();
                             for (i, level) in vtxo_tree.levels.iter().enumerate() {
+                                let mut sigs_level = Vec::new();
                                 for (j, node) in level.nodes.iter().enumerate() {
                                     tracing::debug!(i, j, ?node, "Generating partial signature");
-                                    // MusigSession::new(todo!(), todo!(), todo!(), todo!())
-                                    //     .partial_sign(todo!(), todo!(), todo!(), todo!());
+
+                                    let nonces = nonce_tree[i][j];
+                                    let agg_nonce = MusigAggNonce::new(secp_zkp, &[nonces]);
+
+                                    let psbt = base64::engine::GeneralPurpose::new(
+                                        &base64::alphabet::STANDARD,
+                                        base64::engine::GeneralPurposeConfig::new(),
+                                    )
+                                    .decode(&node.tx)
+                                    .unwrap();
+
+                                    let psbt = Psbt::deserialize(&psbt).unwrap();
+                                    let tx = psbt.unsigned_tx;
+
+                                    // We expect a single input to a VTXO.
+                                    let parent_txid: Txid = node.parent_txid.parse().unwrap();
+
+                                    let input_vout =
+                                        tx.input[VTXO_INPUT_INDEX].previous_output.vout as usize;
+
+                                    let prevout = if i == 0 {
+                                        unsigned_round_tx.clone().unwrap().unsigned_tx.output
+                                            [input_vout]
+                                            .clone()
+                                    } else {
+                                        let parent_level = &vtxo_tree.levels[i - 1];
+                                        let parent_tx: Transaction = parent_level
+                                            .nodes
+                                            .iter()
+                                            .find_map(|node| {
+                                                let txid: Txid = node.txid.parse().unwrap();
+                                                (txid == parent_txid).then_some({
+                                                    let tx = Vec::from_hex(&node.tx).unwrap();
+                                                    deserialize(&tx).unwrap()
+                                                })
+                                            })
+                                            .unwrap();
+
+                                        parent_tx.output[input_vout].clone()
+                                    };
+
+                                    let prevouts = [prevout];
+                                    let prevouts = Prevouts::All(&prevouts);
+
+                                    let tap_sighash = SighashCache::new(tx)
+                                        .taproot_key_spend_signature_hash(
+                                            VTXO_INPUT_INDEX,
+                                            &prevouts,
+                                            bitcoin::TapSighashType::Default,
+                                        )
+                                        .unwrap();
+
+                                    let msg = Message::from_digest(
+                                        tap_sighash.to_raw_hash().to_byte_array(),
+                                    );
+
+                                    let nonce_sk = our_nonce_tree[i][j].take().unwrap().0;
+
+                                    let sig =
+                                        MusigSession::new(secp_zkp, &key_agg_cache, agg_nonce, msg)
+                                            .partial_sign(
+                                                secp_zkp,
+                                                nonce_sk,
+                                                &ephemeral_kp,
+                                                &key_agg_cache,
+                                            )
+                                            .unwrap();
+
+                                    sigs_level.push(sig);
                                 }
+                                sig_tree.push(sigs_level);
                             }
+
+                            let sig_tree = encode_tree(sig_tree).unwrap();
+
+                            client
+                                .submit_tree_signatures(SubmitTreeSignaturesRequest {
+                                    round_id: e.id,
+                                    pubkey: ephemeral_kp.public_key().to_string(),
+                                    tree_signatures: sig_tree.to_lower_hex_string(),
+                                })
+                                .await
+                                .unwrap();
 
                             step = step.next();
                         }
@@ -571,17 +732,34 @@ impl Translator<String, XOnlyPublicKey, ()> for StrPkTranslator {
 const COLUMN_SEPARATOR: u8 = b'|';
 const ROW_SEPARATOR: u8 = b'/';
 
-pub fn encode_nonce_tree(
-    nonce_tree: Vec<Vec<(MusigSecNonce, MusigPubNonce)>>,
-) -> io::Result<Vec<u8>> {
+pub trait ToBytes {
+    fn to_bytes(&self) -> Vec<u8>;
+}
+
+impl ToBytes for MusigPubNonce {
+    fn to_bytes(&self) -> Vec<u8> {
+        self.serialize().to_vec()
+    }
+}
+
+impl ToBytes for MusigPartialSignature {
+    fn to_bytes(&self) -> Vec<u8> {
+        self.serialize().to_vec()
+    }
+}
+
+pub fn encode_tree<T>(tree: Vec<Vec<T>>) -> io::Result<Vec<u8>>
+where
+    T: ToBytes,
+{
     let mut buf = Vec::new();
 
     // [[key0], [key1, key2], [key3, key4, key5, key6]]
-    for level in nonce_tree {
-        for (_, pk) in level {
+    for level in tree {
+        for pk in level {
             buf.write_all(&[COLUMN_SEPARATOR])?;
 
-            buf.write_all(&pk.serialize())?;
+            buf.write_all(&pk.to_bytes())?;
         }
 
         buf.write_all(&[ROW_SEPARATOR])?;
@@ -635,7 +813,7 @@ pub fn decode_nonce_tree(serialized: String) -> io::Result<Vec<Vec<MusigPubNonce
 #[cfg(test)]
 pub mod tests {
     use crate::decode_nonce_tree;
-    use crate::encode_nonce_tree;
+    use crate::encode_tree;
     use crate::error::Error;
     use crate::Blockchain;
     use crate::Client;
@@ -760,11 +938,9 @@ pub mod tests {
             MusigPubNonce::from_slice(&c_bytes).unwrap(),
         );
 
-        let nonce_tree = vec![vec![a], vec![b, c]];
+        let nonce_tree = vec![vec![a.1], vec![b.1, c.1]];
 
-        let serialized = encode_nonce_tree(nonce_tree).unwrap().to_lower_hex_string();
-
-        println!("serialized: {serialized}");
+        let serialized = encode_tree(nonce_tree).unwrap().to_lower_hex_string();
 
         let deserialized = decode_nonce_tree(serialized).unwrap();
 
@@ -785,6 +961,7 @@ pub mod tests {
         let nigiri = Arc::new(Nigiri::new());
 
         let secp = Secp256k1::new();
+        let secp_zkp = zkp::Secp256k1::new();
         let mut rng = thread_rng();
 
         let key = SecretKey::new(&mut rng);
@@ -804,7 +981,7 @@ pub mod tests {
 
         tracing::debug!("Alice offchain balance: {offchain_balance}");
 
-        alice.board(&secp, &mut rng).await.unwrap();
+        alice.board(&secp, &secp_zkp, &mut rng).await.unwrap();
         tokio::time::sleep(Duration::from_secs(60)).await;
     }
 
