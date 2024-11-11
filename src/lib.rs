@@ -11,6 +11,7 @@ use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::generated::ark::v1::Tree;
 use crate::musig::to_zkp_pk;
+use crate::script::CsvSigClosure;
 use base64::Engine;
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::Hash;
@@ -19,13 +20,17 @@ use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
+use bitcoin::key::UntweakedPublicKey;
+use bitcoin::secp256k1;
 use bitcoin::secp256k1::All;
 use bitcoin::sighash::Prevouts;
 use bitcoin::sighash::SighashCache;
+use bitcoin::taproot::TaprootBuilder;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
+use bitcoin::ScriptBuf;
 use bitcoin::Transaction;
 use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
@@ -56,6 +61,7 @@ use zkp::MusigPubNonce;
 use zkp::MusigSecNonce;
 use zkp::MusigSession;
 use zkp::MusigSessionId;
+use zkp::SecretKey;
 
 pub mod generated {
     #[path = ""]
@@ -358,8 +364,12 @@ where
     where
         R: Rng + CryptoRng,
     {
+        let asp_info = self.asp_info.clone().unwrap();
+
         // Generate an ephemeral key.
         let ephemeral_kp = Keypair::new(secp, rng);
+        let ephemeral_kp = Keypair::from_seckey_slice(secp, &[1u8; 32]).unwrap();
+
         let inputs = outpoints
             .into_iter()
             .map(|(o, d)| Input {
@@ -433,6 +443,27 @@ where
 
         let mut step = RoundStep::Start;
         let registered_round_id = register_inputs_for_next_round_id;
+
+        let asp_pk: secp256k1::PublicKey = asp_info.pubkey.parse().unwrap();
+        let sweep_closure = CsvSigClosure {
+            pk: asp_pk,
+            timeout: asp_info.round_lifetime,
+        };
+
+        let sweep_tap_leaf = sweep_closure.leaf();
+
+        let sweep_tap_tree = {
+            let (script, version) = sweep_tap_leaf.as_script().unwrap();
+
+            TaprootBuilder::new()
+                .add_leaf_with_ver(0, ScriptBuf::from(script), version)
+                .unwrap()
+                .finalize(
+                    secp,
+                    UntweakedPublicKey::from(PublicKey::from_str(UNSPENDABLE_KEY).unwrap()),
+                )
+        }
+        .unwrap();
 
         let mut unsigned_round_tx: Option<Psbt> = None;
         let mut vtxo_tree: Option<Tree> = None;
@@ -549,12 +580,43 @@ where
                             );
 
                             let vtxo_tree = vtxo_tree.clone().expect("To have received it");
-                            let cosigner_pks = cosigner_pks.clone().expect("To have received them");
+                            let mut cosigner_pks =
+                                cosigner_pks.clone().expect("To have received them");
                             let mut our_nonce_tree =
                                 our_nonce_tree.take().expect("To have generated them");
 
-                            let key_agg_cache =
-                                MusigKeyAggCache::new(secp_zkp, cosigner_pks.as_slice());
+                            cosigner_pks.sort_by_key(|k| k.serialize());
+
+                            for pk in cosigner_pks.iter() {
+                                dbg!(pk.serialize().to_lower_hex_string());
+                            }
+
+                            let mut key_agg_cache = MusigKeyAggCache::new(secp_zkp, &cosigner_pks);
+
+                            // let tweak = zkp::SecretKey::from_slice(
+                            //     sweep_tap_tree.tap_tweak().as_byte_array(),
+                            // )
+                            // .unwrap();
+
+                            // println!("Tweak: {}", tweak.display_secret());
+
+                            dbg!(key_agg_cache
+                                .agg_pk_full()
+                                .serialize()
+                                .to_lower_hex_string());
+
+                            // TODO: We should be able to arrive at the same tweak without having to hard-code it.
+                            let tweak_res = key_agg_cache
+                                .pubkey_xonly_tweak_add(secp_zkp, SecretKey::from_str("730a122677aca49d1b7dd9fdc808ba7da77af952a4384607143e42cff767562d").unwrap())
+                                // .pubkey_ec_tweak_add(secp_zkp, SecretKey::from_str("2d5667f7cf423e14074638a452f97aa77dba08c8fdd97d1b9da4ac7726120a73").unwrap())
+                                .unwrap();
+
+                            println!("Tweak res: {}", tweak_res.serialize().to_lower_hex_string());
+
+                            dbg!(key_agg_cache
+                                .agg_pk_full()
+                                .serialize()
+                                .to_lower_hex_string());
 
                             let ephemeral_kp = zkp::Keypair::from_seckey_slice(
                                 secp_zkp,
@@ -568,8 +630,10 @@ where
                                 for (j, node) in level.nodes.iter().enumerate() {
                                     tracing::debug!(i, j, ?node, "Generating partial signature");
 
-                                    let nonces = nonce_tree[i][j];
-                                    let agg_nonce = MusigAggNonce::new(secp_zkp, &[nonces]);
+                                    let nonce = nonce_tree[i][j];
+
+                                    // Equivalent to parsing the individual `MusigAggNonce` from a slice.
+                                    let agg_nonce = MusigAggNonce::new(secp_zkp, &[nonce]);
 
                                     let psbt = base64::engine::GeneralPurpose::new(
                                         &base64::alphabet::STANDARD,
@@ -587,6 +651,7 @@ where
                                     let input_vout =
                                         tx.input[VTXO_INPUT_INDEX].previous_output.vout as usize;
 
+                                    // NOTE: It seems like we are doing this correctly (at least for the root VTXO).
                                     let prevout = if i == 0 {
                                         unsigned_round_tx.clone().unwrap().unsigned_tx.output
                                             [input_vout]
