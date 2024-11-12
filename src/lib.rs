@@ -10,6 +10,7 @@ use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::generated::ark::v1::Tree;
+use crate::musig::from_zkp_xonly;
 use crate::musig::to_zkp_pk;
 use crate::script::CsvSigClosure;
 use base64::Engine;
@@ -20,7 +21,6 @@ use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
-use bitcoin::key::UntweakedPublicKey;
 use bitcoin::secp256k1;
 use bitcoin::secp256k1::All;
 use bitcoin::sighash::Prevouts;
@@ -61,7 +61,6 @@ use zkp::MusigPubNonce;
 use zkp::MusigSecNonce;
 use zkp::MusigSession;
 use zkp::MusigSessionId;
-use zkp::SecretKey;
 
 pub mod generated {
     #[path = ""]
@@ -356,7 +355,7 @@ where
         secp: &Secp256k1<All>,
         secp_zkp: &zkp::Secp256k1<zkp::All>,
         rng: &mut R,
-        outpoints: Vec<(OutPoint, BoardingAddress)>,
+        boarding_outputs: Vec<(OutPoint, BoardingAddress)>,
         address: ArkAddress,
         total_amount: Amount,
     ) -> Result<String, Error>
@@ -370,7 +369,8 @@ where
         let ephemeral_kp = Keypair::new(secp, rng);
         let ephemeral_kp = Keypair::from_seckey_slice(secp, &[1u8; 32]).unwrap();
 
-        let inputs = outpoints
+        let inputs = boarding_outputs
+            .clone()
             .into_iter()
             .map(|(o, d)| Input {
                 outpoint: Some(Outpoint {
@@ -451,19 +451,6 @@ where
         };
 
         let sweep_tap_leaf = sweep_closure.leaf();
-
-        let sweep_tap_tree = {
-            let (script, version) = sweep_tap_leaf.as_script().unwrap();
-
-            TaprootBuilder::new()
-                .add_leaf_with_ver(0, ScriptBuf::from(script), version)
-                .unwrap()
-                .finalize(
-                    secp,
-                    UntweakedPublicKey::from(PublicKey::from_str(UNSPENDABLE_KEY).unwrap()),
-                )
-        }
-        .unwrap();
 
         let mut unsigned_round_tx: Option<Psbt> = None;
         let mut vtxo_tree: Option<Tree> = None;
@@ -587,36 +574,26 @@ where
 
                             cosigner_pks.sort_by_key(|k| k.serialize());
 
-                            for pk in cosigner_pks.iter() {
-                                dbg!(pk.serialize().to_lower_hex_string());
-                            }
-
                             let mut key_agg_cache = MusigKeyAggCache::new(secp_zkp, &cosigner_pks);
 
-                            // let tweak = zkp::SecretKey::from_slice(
-                            //     sweep_tap_tree.tap_tweak().as_byte_array(),
-                            // )
-                            // .unwrap();
+                            let sweep_tap_tree = {
+                                let (script, version) = sweep_tap_leaf.as_script().unwrap();
 
-                            // println!("Tweak: {}", tweak.display_secret());
+                                TaprootBuilder::new()
+                                    .add_leaf_with_ver(0, ScriptBuf::from(script), version)
+                                    .unwrap()
+                                    .finalize(secp, from_zkp_xonly(key_agg_cache.agg_pk()))
+                            }
+                            .unwrap();
 
-                            dbg!(key_agg_cache
-                                .agg_pk_full()
-                                .serialize()
-                                .to_lower_hex_string());
+                            let tweak = zkp::SecretKey::from_slice(
+                                sweep_tap_tree.tap_tweak().as_byte_array(),
+                            )
+                            .unwrap();
 
-                            // TODO: We should be able to arrive at the same tweak without having to hard-code it.
-                            let tweak_res = key_agg_cache
-                                .pubkey_xonly_tweak_add(secp_zkp, SecretKey::from_str("730a122677aca49d1b7dd9fdc808ba7da77af952a4384607143e42cff767562d").unwrap())
-                                // .pubkey_ec_tweak_add(secp_zkp, SecretKey::from_str("2d5667f7cf423e14074638a452f97aa77dba08c8fdd97d1b9da4ac7726120a73").unwrap())
+                            key_agg_cache
+                                .pubkey_xonly_tweak_add(secp_zkp, tweak)
                                 .unwrap();
-
-                            println!("Tweak res: {}", tweak_res.serialize().to_lower_hex_string());
-
-                            dbg!(key_agg_cache
-                                .agg_pk_full()
-                                .serialize()
-                                .to_lower_hex_string());
 
                             let ephemeral_kp = zkp::Keypair::from_seckey_slice(
                                 secp_zkp,
@@ -719,15 +696,40 @@ where
                             step = step.next();
                         }
                         Some(get_event_stream_response::Event::RoundFinalization(e)) => {
-                            if step != RoundStep::RoundFinalization {
+                            if step != RoundStep::RoundSigningNoncesGenerated {
                                 continue;
                             }
                             tracing::debug!(?e, "Round finalization started");
 
+                            // TODO: Sign forgeit TXs based on VTXOs. Skipping bc we don't have any VTXOs yet.
+
+                            let round_psbt = {
+                                let psbt = base64::engine::GeneralPurpose::new(
+                                    &base64::alphabet::STANDARD,
+                                    base64::engine::GeneralPurposeConfig::new(),
+                                )
+                                .decode(&e.round_tx)
+                                .unwrap();
+
+                                Psbt::deserialize(&psbt).unwrap()
+                            };
+
+                            for (outpoint, address) in boarding_outputs.iter() {
+                                for (i, input) in round_psbt.inputs.iter().enumerate() {
+                                    // TODO: Condition based on i.
+                                    if true {
+                                        input.tap_scripts = todo!();
+                                    }
+                                }
+                            }
+
                             step = step.next();
-                            // TODO: implement me
                         }
                         Some(get_event_stream_response::Event::RoundFinalized(e)) => {
+                            if step != RoundStep::RoundFinalization {
+                                continue;
+                            }
+
                             tracing::info!(round_id = e.id, txid = e.round_txid, "Round finalized");
                             return Ok(e.round_txid);
                         }
