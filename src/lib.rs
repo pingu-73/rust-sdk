@@ -7,6 +7,7 @@ use crate::generated::ark::v1::Output;
 use crate::generated::ark::v1::PingRequest;
 use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
 use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
+use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::generated::ark::v1::Tree;
@@ -21,16 +22,21 @@ use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
+use bitcoin::opcodes;
 use bitcoin::secp256k1;
 use bitcoin::secp256k1::All;
 use bitcoin::sighash::Prevouts;
 use bitcoin::sighash::SighashCache;
+use bitcoin::taproot;
+use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::ScriptBuf;
+use bitcoin::TapLeafHash;
+use bitcoin::TapSighashType;
 use bitcoin::Transaction;
 use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
@@ -43,6 +49,7 @@ use miniscript::TranslatePk;
 use miniscript::Translator;
 use rand::CryptoRng;
 use rand::Rng;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::io::Read;
@@ -53,7 +60,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tonic::codegen::tokio_stream::StreamExt;
 use zkp::new_musig_nonce_pair;
-use zkp::Message;
 use zkp::MusigAggNonce;
 use zkp::MusigKeyAggCache;
 use zkp::MusigPartialSignature;
@@ -114,9 +120,36 @@ pub struct Client<B> {
 
 #[derive(Clone, Debug)]
 pub struct BoardingAddress {
+    pub asp: secp256k1::PublicKey,
+    pub owner: secp256k1::PublicKey,
     pub address: Address,
     pub descriptor: miniscript::descriptor::Tr<XOnlyPublicKey>,
     pub ark_descriptor: String,
+}
+
+impl BoardingAddress {
+    pub fn forfeit_spend_info(&self) -> (ScriptBuf, taproot::ControlBlock) {
+        let asp = self.asp.to_x_only_pubkey();
+        let owner = self.owner.to_x_only_pubkey();
+
+        // It's kind of rubbish that we need to reconstruct the script manually to get the
+        // `ControlBlock`. It would be nicer to just get the `ControlBlock` for the left leaf and
+        // the right leaf, knowing which one is which.
+        let script = bitcoin::ScriptBuf::builder()
+            .push_x_only_key(&asp)
+            .push_opcode(opcodes::all::OP_CHECKSIGVERIFY)
+            .push_x_only_key(&owner)
+            .push_opcode(opcodes::all::OP_CHECKSIG)
+            .into_script();
+
+        let control_block = self
+            .descriptor
+            .spend_info()
+            .control_block(&(script.clone(), LeafVersion::TapScript))
+            .expect("control block");
+
+        (script, control_block)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -230,9 +263,9 @@ where
         let boarding_descriptor = asp_info.boarding_descriptor_template;
 
         let asp_pk: PublicKey = asp_info.pubkey.parse().unwrap();
-        let asp_pk = asp_pk.to_x_only_pubkey();
 
-        let our_pk = self.kp.public_key().to_x_only_pubkey();
+        let owner_pk = self.kp.public_key();
+        let owner_xonly_pk = owner_pk.to_x_only_pubkey();
 
         let unspendable_key: PublicKey = UNSPENDABLE_KEY.parse().unwrap();
         let unspendable_key = unspendable_key.to_x_only_pubkey();
@@ -240,9 +273,9 @@ where
         let mut pk_map = HashMap::new();
 
         pk_map.insert("UNSPENDABLE_KEY".to_string(), unspendable_key);
-        pk_map.insert("USER_0".to_string(), our_pk);
-        pk_map.insert("USER_1".to_string(), our_pk);
-        pk_map.insert("ASP".to_string(), asp_pk);
+        pk_map.insert("USER_0".to_string(), owner_xonly_pk);
+        pk_map.insert("USER_1".to_string(), owner_xonly_pk);
+        pk_map.insert("ASP".to_string(), asp_pk.to_x_only_pubkey());
 
         let mut t = StrPkTranslator { pk_map };
 
@@ -257,8 +290,11 @@ where
 
         let ark_descriptor = asp_info
             .orig_boarding_descriptor
-            .replace("USER", our_pk.to_string().as_str());
+            .replace("USER", owner_xonly_pk.to_string().as_str());
+
         Ok(BoardingAddress {
+            asp: asp_pk.inner,
+            owner: owner_pk,
             address,
             descriptor: tr,
             ark_descriptor,
@@ -324,7 +360,8 @@ where
 
         // Joining a round is likely to fail depending on the timing, so we keep retrying.
         //
-        // TODO: Consider not retrying on all errors.
+        // TODO: Consider not retrying on all errors. ATM the retry mechanism is way too quick as
+        // well. We should use backoff and only retry on ephemeral errors.
         let txid = loop {
             match self
                 .join_next_ark_round(
@@ -382,14 +419,14 @@ where
             .collect();
 
         // TODO: Move this into our API layer.
-        let mut client = self.inner.inner.clone().ok_or(Error::Unknown)?;
+        let mut client = self.inner.inner.clone().unwrap();
         let response = client
             .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
                 inputs,
                 ephemeral_pubkey: Some(ephemeral_kp.public_key().to_string()),
             })
             .await
-            .map_err(|_| Error::Unknown)?
+            .unwrap()
             .into_inner();
 
         let register_inputs_for_next_round_id = response.id;
@@ -408,7 +445,7 @@ where
                 }],
             })
             .await
-            .map_err(|_| Error::Unknown)?;
+            .unwrap();
 
         // The protocol expects us to ping the ASP every 5 seconds to let the server know that we
         // are still interested in joining the round.
@@ -438,7 +475,7 @@ where
         let response = client
             .get_event_stream(GetEventStreamRequest {})
             .await
-            .map_err(|_| Error::Unknown)?;
+            .unwrap();
         let mut stream = response.into_inner();
 
         let mut step = RoundStep::Start;
@@ -653,6 +690,10 @@ where
                                     let prevouts = [prevout];
                                     let prevouts = Prevouts::All(&prevouts);
 
+                                    // Here we are generating a key spend sighash, because the VTXO
+                                    // tree outputs are signed by all parties with a VTXO in this
+                                    // new round, so we use a musig key spend to efficiently
+                                    // coordinate all the parties.
                                     let tap_sighash = SighashCache::new(tx)
                                         .taproot_key_spend_signature_hash(
                                             VTXO_INPUT_INDEX,
@@ -661,7 +702,7 @@ where
                                         )
                                         .unwrap();
 
-                                    let msg = Message::from_digest(
+                                    let msg = zkp::Message::from_digest(
                                         tap_sighash.to_raw_hash().to_byte_array(),
                                     );
 
@@ -701,27 +742,100 @@ where
                             }
                             tracing::debug!(?e, "Round finalization started");
 
-                            // TODO: Sign forgeit TXs based on VTXOs. Skipping bc we don't have any VTXOs yet.
+                            // TODO: Sign forfeit TXs based on VTXOs. Skipping bc we are only
+                            // boarding UTXOs for now.
 
-                            let round_psbt = {
-                                let psbt = base64::engine::GeneralPurpose::new(
-                                    &base64::alphabet::STANDARD,
-                                    base64::engine::GeneralPurposeConfig::new(),
-                                )
-                                .decode(&e.round_tx)
-                                .unwrap();
+                            let base64 = base64::engine::GeneralPurpose::new(
+                                &base64::alphabet::STANDARD,
+                                base64::engine::GeneralPurposeConfig::new(),
+                            );
+
+                            let mut round_psbt = {
+                                let psbt = base64.decode(&e.round_tx).unwrap();
 
                                 Psbt::deserialize(&psbt).unwrap()
                             };
 
-                            for (outpoint, address) in boarding_outputs.iter() {
-                                for (i, input) in round_psbt.inputs.iter().enumerate() {
-                                    // TODO: Condition based on i.
-                                    if true {
-                                        input.tap_scripts = todo!();
+                            dbg!("Before", &round_psbt);
+
+                            let prevouts = round_psbt
+                                .inputs
+                                .iter()
+                                .filter_map(|i| i.witness_utxo.clone())
+                                .collect::<Vec<_>>();
+
+                            // Sign round transaction inputs that belong to us. For every output we
+                            // are boarding, we look through the round transaction inputs to find a
+                            // matching input.
+                            for (boarding_outpoint, boarding_address) in boarding_outputs.iter() {
+                                for (i, input) in round_psbt.inputs.iter_mut().enumerate() {
+                                    let previous_outpoint =
+                                        round_psbt.unsigned_tx.input[i].previous_output;
+
+                                    if &previous_outpoint == boarding_outpoint {
+                                        // In the case of a boarding output, we are actually using a
+                                        // script spend path.
+                                        let (forfeit_script, forfeit_control_block) =
+                                            boarding_address.forfeit_spend_info();
+
+                                        let leaf_version = forfeit_control_block.leaf_version;
+                                        input.tap_scripts = BTreeMap::from_iter([(
+                                            forfeit_control_block,
+                                            (forfeit_script.clone(), leaf_version),
+                                        )]);
+
+                                        let prevouts = Prevouts::All(&prevouts);
+
+                                        let leaf_hash =
+                                            TapLeafHash::from_script(&forfeit_script, leaf_version);
+
+                                        let tap_sighash =
+                                            SighashCache::new(&round_psbt.unsigned_tx)
+                                                .taproot_script_spend_signature_hash(
+                                                    i,
+                                                    &prevouts,
+                                                    leaf_hash,
+                                                    bitcoin::TapSighashType::Default,
+                                                )
+                                                .unwrap();
+
+                                        let msg = secp256k1::Message::from_digest(
+                                            tap_sighash.to_raw_hash().to_byte_array(),
+                                        );
+
+                                        let sig = secp.sign_schnorr_no_aux_rand(&msg, &self.kp);
+                                        let pk = self.kp.x_only_public_key().0;
+
+                                        if secp.verify_schnorr(&sig, &msg, &pk).is_err() {
+                                            tracing::error!(
+                                                "Failed to verify own round TX signature"
+                                            );
+
+                                            return Err(Error::Unknown);
+                                        }
+
+                                        let sig = taproot::Signature {
+                                            signature: sig,
+                                            sighash_type: TapSighashType::Default,
+                                        };
+
+                                        input.tap_script_sigs =
+                                            BTreeMap::from_iter([((pk, leaf_hash), sig)]);
                                     }
                                 }
                             }
+
+                            dbg!("After", &round_psbt);
+
+                            let signed_round_psbt = base64.encode(round_psbt.serialize());
+
+                            client
+                                .submit_signed_forfeit_txs(SubmitSignedForfeitTxsRequest {
+                                    signed_forfeit_txs: Vec::new(),
+                                    signed_round_tx: Some(signed_round_psbt),
+                                })
+                                .await
+                                .unwrap();
 
                             step = step.next();
                         }
@@ -740,6 +854,7 @@ where
                                     reason = e.reason,
                                     "Failed registering in round"
                                 );
+
                                 // TODO: return a different error
                                 return Err(Error::Unknown);
                             }
