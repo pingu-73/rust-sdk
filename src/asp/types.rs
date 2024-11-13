@@ -51,7 +51,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Vtxo {
     pub outpoint: Option<OutPoint>,
     pub spent: bool,

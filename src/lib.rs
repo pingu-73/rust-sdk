@@ -1,5 +1,6 @@
 use crate::ark_address::ArkAddress;
-use crate::generated::ark::v1::get_event_stream_response;
+use crate::asp::Vtxo;
+use crate::coinselect::coin_select;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::Outpoint;
@@ -11,6 +12,9 @@ use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::generated::ark::v1::Tree;
+use crate::generated::ark::v1::{
+    get_event_stream_response, AsyncPaymentInput, CreatePaymentRequest,
+};
 use crate::musig::from_zkp_xonly;
 use crate::musig::to_zkp_pk;
 use crate::script::CsvSigClosure;
@@ -79,6 +83,7 @@ pub mod generated {
 // TODO: Reconsider whether these should be public or not.
 pub mod ark_address;
 pub mod asp;
+mod coinselect;
 pub mod error;
 pub mod musig;
 pub mod script;
@@ -104,7 +109,11 @@ const BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT: &str =
 /// We use `USER_0` and `USER_1` for the same user key, because `rust-miniscript` does not allow
 /// repeating identifiers.
 const DEFAULT_VTXO_DESCRIPTOR_TEMPLATE_MINISCRIPT: &str =
-    "tr(UNSPENDABLE_KEY,{and_v(v:pk(USER_1),pk(ASP)),and_v(v:older(TIMEOUT),pk(USER_0))})";
+    "tr(UNSPENDABLE_KEY,{and_v(v:pk(ASP),pk(USER_1)),and_v(v:older(TIMEOUT),pk(USER_0))})";
+
+/// tr(unspendable, { and(pk(user), pk(asp)), and(older(timeout), pk(user)) })
+const DEFAULT_VTXO_DESCRIPTOR_TEMPLATE: &str =
+    "tr(UNSPENDABLE_KEY,{ and(pk(USER), pk(ASP)), and(older(TIMEOUT), pk(USER)) })";
 
 const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
 
@@ -158,6 +167,7 @@ pub struct DefaultVtxoScript {
     pub owner: XOnlyPublicKey,
     pub exit_delay: u64,
     pub descriptor: miniscript::descriptor::Tr<XOnlyPublicKey>,
+    pub ark_descriptor: String,
 }
 
 impl DefaultVtxoScript {
@@ -187,12 +197,42 @@ impl DefaultVtxoScript {
             _ => unreachable!("Descriptor must be taproot"),
         };
 
+        let ark_descriptor = DEFAULT_VTXO_DESCRIPTOR_TEMPLATE
+            .replace("UNSPENDABLE_KEY", unspendable_key.to_string().as_str())
+            .replace("USER", owner.to_string().as_str())
+            .replace("ASP", asp.to_string().as_str())
+            .replace("TIMEOUT", exit_delay.to_string().as_str());
+
         Ok(Self {
             asp,
             owner,
             exit_delay,
             descriptor: tr,
+            ark_descriptor,
         })
+    }
+
+    pub fn forfeit_spend_info(&self) -> (ScriptBuf, taproot::ControlBlock) {
+        let asp = self.asp.to_x_only_pubkey();
+        let owner = self.owner.to_x_only_pubkey();
+
+        // It's kind of rubbish that we need to reconstruct the script manually to get the
+        // `ControlBlock`. It would be nicer to just get the `ControlBlock` for the left leaf and
+        // the right leaf, knowing which one is which.
+        let script = bitcoin::ScriptBuf::builder()
+            .push_x_only_key(&asp)
+            .push_opcode(opcodes::all::OP_CHECKSIGVERIFY)
+            .push_x_only_key(&owner)
+            .push_opcode(opcodes::all::OP_CHECKSIG)
+            .into_script();
+
+        let control_block = self
+            .descriptor
+            .spend_info()
+            .control_block(&(script.clone(), LeafVersion::TapScript))
+            .expect("control block");
+
+        (script, control_block)
     }
 }
 
@@ -229,7 +269,7 @@ where
     }
 
     // At the moment we are always generating the same address.
-    pub fn get_offchain_address(&self) -> Result<ArkAddress, Error> {
+    pub fn get_offchain_address(&self) -> Result<(ArkAddress, DefaultVtxoScript), Error> {
         let asp_info = self.asp_info.clone().unwrap();
 
         let asp: PublicKey = asp_info.pubkey.parse().unwrap();
@@ -246,10 +286,10 @@ where
 
         let ark_address = ArkAddress::new(network, asp, *vtxo_tap_key);
 
-        Ok(ark_address)
+        Ok((ark_address, vtxo_script))
     }
 
-    pub fn get_offchain_addresses(&self) -> Result<Vec<ArkAddress>, Error> {
+    pub fn get_offchain_addresses(&self) -> Result<Vec<(ArkAddress, DefaultVtxoScript)>, Error> {
         let address = self.get_offchain_address().unwrap();
 
         Ok(vec![address])
@@ -306,22 +346,27 @@ where
         Ok(vec![address])
     }
 
-    pub async fn offchain_balance(&self) -> Result<Amount, Error> {
-        let addresses: Vec<ArkAddress> = self.get_offchain_addresses()?;
+    pub async fn spendable_vtxos(&self) -> Result<Vec<(Vec<Vtxo>, DefaultVtxoScript)>, Error> {
+        let addresses = self.get_offchain_addresses()?;
 
-        let mut total = Amount::ZERO;
-        for address in addresses.into_iter() {
+        let mut spendable = vec![];
+        for (address, script) in addresses.into_iter() {
             let res = self.inner.list_vtxos(address).await?;
-
-            let sum = res
-                .spendable
-                .iter()
-                .fold(Amount::ZERO, |acc, x| acc + x.amount);
-
-            total += sum;
+            // TODO: filter expired VTXOs
+            spendable.push((res.spendable, script));
         }
 
-        Ok(total)
+        Ok(spendable)
+    }
+
+    pub async fn offchain_balance(&self) -> Result<Amount, Error> {
+        let vec = self.spendable_vtxos().await?;
+        let sum = vec
+            .iter()
+            .flat_map(|(vtxos, _)| vtxos)
+            .fold(Amount::ZERO, |acc, x| acc + x.amount);
+
+        Ok(sum)
     }
 
     pub async fn board<R>(
@@ -354,7 +399,7 @@ where
         // TODO: Include settlement of VTXOs.
 
         // Get off-chain address and send all funds to this address, no change output 🦄
-        let address = self.get_offchain_address()?;
+        let (address, _) = self.get_offchain_address()?;
 
         tracing::info!(offchain_adress = ?address.encode(), ?boarding_outputs, "Attempting to board the ark");
 
@@ -871,6 +916,86 @@ where
             }
         }
     }
+
+    pub async fn send_oor(&self, address: ArkAddress, amount: Amount) -> Result<(), Error> {
+        // 1. get spendable VTXOs & script/descriptor for each VTXO
+        let spendable_vtxos_and_script = self.spendable_vtxos().await?;
+
+        // 2. run coin selection algorithm on candidates
+        let spendable_vtxos_only = spendable_vtxos_and_script
+            .iter()
+            .flat_map(|(vtxos, _)| vtxos.clone())
+            .collect::<Vec<_>>();
+
+        let (_, selected_coins, change_amount) = coin_select(
+            vec![],
+            spendable_vtxos_only,
+            amount,
+            self.asp_info.clone().unwrap().dust,
+            true,
+        )?;
+
+        let mut change_output = None;
+        if change_amount > Amount::ZERO {
+            // 3. get new change address for sender
+            let (change_address, _) = self.get_offchain_address()?;
+            change_output.replace((change_address, change_amount));
+        }
+
+        let selected_coins =
+            selected_coins
+                .into_iter()
+                .map(|coin| {
+                    let script = spendable_vtxos_and_script.clone().into_iter().find_map(
+                        |(vtxos, script)| {
+                            if vtxos.contains(&coin) {
+                                Some(script)
+                            } else {
+                                None
+                            }
+                        },
+                    );
+                    (coin, script.unwrap())
+                })
+                .collect::<Vec<(_, _)>>();
+
+        let inputs = selected_coins
+            .iter()
+            .map(|(vtxo, script)| {
+                let (forfeit_script, control_block) = script.forfeit_spend_info();
+                let leaf_hash =
+                    TapLeafHash::from_script(&dbg!(forfeit_script), control_block.leaf_version);
+
+                AsyncPaymentInput {
+                    input: Some(Input {
+                        outpoint: vtxo.outpoint.map(|outpoint| Outpoint {
+                            txid: outpoint.txid.to_string(),
+                            vout: outpoint.vout,
+                        }),
+                        descriptor: script.ark_descriptor.clone(),
+                    }),
+                    forfeit_leaf_hash: dbg!(leaf_hash.to_string()),
+                }
+            })
+            .collect();
+
+        let mut outputs = vec![Output {
+            address: address.encode().unwrap(),
+            amount: amount.to_sat(),
+        }];
+
+        if let Some((change_address, change_amount)) = change_output {
+            outputs.push(Output {
+                address: change_address.encode().unwrap(),
+                amount: change_amount.to_sat(),
+            })
+        }
+        let create_payment_request = CreatePaymentRequest { inputs, outputs };
+        let mut client = self.inner.inner.clone().unwrap();
+        client.create_payment(create_payment_request).await.unwrap();
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1142,10 +1267,10 @@ pub mod tests {
         let secp_zkp = zkp::Secp256k1::new();
         let mut rng = thread_rng();
 
-        let key = SecretKey::new(&mut rng);
-        let keypair = Keypair::from_secret_key(&secp, &key);
+        let alice_key = SecretKey::new(&mut rng);
+        let alice_keypair = Keypair::from_secret_key(&secp, &alice_key);
 
-        let alice = setup_client("alice".to_string(), keypair, nigiri.clone()).await;
+        let alice = setup_client("alice".to_string(), alice_keypair, nigiri.clone()).await;
 
         let alice_boarding_address = alice.get_boarding_address().unwrap();
 
@@ -1162,8 +1287,27 @@ pub mod tests {
         alice.board(&secp, &secp_zkp, &mut rng).await.unwrap();
 
         let offchain_balance = alice.offchain_balance().await.unwrap();
-
         tracing::debug!("Post boarding: Alice offchain balance: {offchain_balance}");
+
+        let bob_key = SecretKey::new(&mut rng);
+        let bob_keypair = Keypair::from_secret_key(&secp, &bob_key);
+
+        let bob = setup_client("bob".to_string(), bob_keypair, nigiri.clone()).await;
+
+        let bob_offchain_balance = bob.offchain_balance().await.unwrap();
+        tracing::debug!("Pre payment: Bob offchain balance: {bob_offchain_balance}");
+
+        let (bob_offchain_address, _) = bob.get_offchain_address().unwrap();
+        let amount = Amount::from_sat(100_000);
+        tracing::debug!("Alice is sending {amount} to Bob offchain...");
+
+        alice.send_oor(bob_offchain_address, amount).await.unwrap();
+
+        let bob_offchain_balance = bob.offchain_balance().await.unwrap();
+        tracing::debug!("Post payment: Bob offchain balance: {bob_offchain_balance}");
+
+        let alice_offchain_balance = alice.offchain_balance().await.unwrap();
+        tracing::debug!("Post payment: Alice offchain balance: {alice_offchain_balance}");
     }
 
     pub fn init_tracing() {
