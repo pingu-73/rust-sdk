@@ -23,7 +23,6 @@ mod tests {
 
     use super::*;
     use crate::script::CsvSigClosure;
-    use bitcoin::hex::DisplayHex;
     use bitcoin::hex::FromHex;
     use bitcoin::key::Keypair;
     use bitcoin::key::PublicKey;
@@ -129,7 +128,7 @@ mod tests {
 
         // TODO: Make sure that we call it like the Ark does.
         let alice_session_id = MusigSessionId::assume_unique_per_nonce_gen([1u8; 32]);
-        let (_alice_nonce_sk, alice_nonce_pk) = new_musig_nonce_pair(
+        let (_alice_nonce_sk, _alice_nonce_pk) = new_musig_nonce_pair(
             &secp_zkp,
             alice_session_id,
             None,
@@ -142,7 +141,7 @@ mod tests {
         .unwrap();
 
         let bob_session_id = MusigSessionId::assume_unique_per_nonce_gen([2u8; 32]);
-        let (_bob_nonce_sk, bob_nonce_pk) = new_musig_nonce_pair(
+        let (_bob_nonce_sk, _bob_nonce_pk) = new_musig_nonce_pair(
             &secp_zkp,
             bob_session_id,
             None,
@@ -154,7 +153,7 @@ mod tests {
         .unwrap();
 
         let asp_session_id = MusigSessionId::assume_unique_per_nonce_gen([3u8; 32]);
-        let (_asp_nonce_sk, asp_nonce_pk) = new_musig_nonce_pair(
+        let (_asp_nonce_sk, _asp_nonce_pk) = new_musig_nonce_pair(
             &secp_zkp,
             asp_session_id,
             None,
@@ -164,20 +163,5 @@ mod tests {
             None,
         )
         .unwrap();
-
-        dbg!(asp_nonce_pk.serialize().to_lower_hex_string());
-        dbg!(alice_nonce_pk.serialize().to_lower_hex_string());
-        dbg!(bob_nonce_pk.serialize().to_lower_hex_string());
-
-        // zkp::musig::MusigSession::new(secp, key_agg_cache, agg_nonce, msg).partial_sign(
-        //     secp,
-        //     secnonce,
-        //     keypair,
-        //     key_agg_cache,
-        // )
-
-        // let session = MusigSession::new(&secp, key_agg_cache, agg_nonce, msg);
-
-        // session.nonce_parity()
     }
 }

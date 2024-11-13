@@ -963,8 +963,12 @@ where
             .iter()
             .map(|(vtxo, script)| {
                 let (forfeit_script, control_block) = script.forfeit_spend_info();
-                let leaf_hash =
-                    TapLeafHash::from_script(&dbg!(forfeit_script), control_block.leaf_version);
+                let mut leaf_hash =
+                    TapLeafHash::from_script(&forfeit_script, control_block.leaf_version)
+                        .to_byte_array();
+
+                // The ASP reverses this for some reason.
+                leaf_hash.reverse();
 
                 AsyncPaymentInput {
                     input: Some(Input {
@@ -974,7 +978,7 @@ where
                         }),
                         descriptor: script.ark_descriptor.clone(),
                     }),
-                    forfeit_leaf_hash: dbg!(leaf_hash.to_string()),
+                    forfeit_leaf_hash: leaf_hash.to_lower_hex_string(),
                 }
             })
             .collect();
