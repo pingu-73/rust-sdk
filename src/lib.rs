@@ -404,7 +404,6 @@ where
 
         // Generate an ephemeral key.
         let ephemeral_kp = Keypair::new(secp, rng);
-        let ephemeral_kp = Keypair::from_seckey_slice(secp, &[1u8; 32]).unwrap();
 
         let inputs = boarding_outputs
             .clone()
@@ -523,11 +522,13 @@ where
                                     // node in the VTXO tree.
                                     let alice_session_id = MusigSessionId::new(rng);
                                     let extra_rand = rng.gen();
+
+                                    // TODO: Revisit nonce generation, because this is something
+                                    // that we could mess up in a non-obvious way.
                                     let (nonce_sk, nonce_pk) = new_musig_nonce_pair(
                                         &secp_zkp,
                                         alice_session_id,
                                         None,
-                                        // Some(to_zkp_kp(&secp_zkp, &alice_kp).secret_key()),
                                         None,
                                         to_zkp_pk(ephemeral_kp.public_key()),
                                         None,
@@ -756,8 +757,6 @@ where
                                 Psbt::deserialize(&psbt).unwrap()
                             };
 
-                            dbg!("Before", &round_psbt);
-
                             let prevouts = round_psbt
                                 .inputs
                                 .iter()
@@ -824,8 +823,6 @@ where
                                     }
                                 }
                             }
-
-                            dbg!("After", &round_psbt);
 
                             let signed_round_psbt = base64.encode(round_psbt.serialize());
 
@@ -1016,7 +1013,6 @@ pub mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::Once;
-    use std::time::Duration;
     use zkp::MusigPubNonce;
     use zkp::MusigSecNonce;
 
@@ -1161,10 +1157,13 @@ pub mod tests {
 
         let offchain_balance = alice.offchain_balance().await.unwrap();
 
-        tracing::debug!("Alice offchain balance: {offchain_balance}");
+        tracing::debug!("Pre boarding: Alice offchain balance: {offchain_balance}");
 
         alice.board(&secp, &secp_zkp, &mut rng).await.unwrap();
-        tokio::time::sleep(Duration::from_secs(60)).await;
+
+        let offchain_balance = alice.offchain_balance().await.unwrap();
+
+        tracing::debug!("Post boarding: Alice offchain balance: {offchain_balance}");
     }
 
     pub fn init_tracing() {
