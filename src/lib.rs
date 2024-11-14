@@ -1,6 +1,7 @@
 use crate::ark_address::ArkAddress;
 use crate::asp::Vtxo;
 use crate::coinselect::coin_select;
+use crate::generated::ark::v1::CompletePaymentRequest;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::Outpoint;
@@ -97,10 +98,8 @@ pub mod script;
 ///
 /// We use `USER_0` and `USER_1` for the same user key, because `rust-miniscript` does not allow
 /// repeating identifiers.
-/// TODO: fixme: 9d0440=4195485 has been used by ArkD, but doesn't seem to be correct, it should be
-/// 003a09=604672
 const BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT: &str =
-    "tr(UNSPENDABLE_KEY,{and_v(v:pk(ASP),pk(USER_1)),and_v(v:older(4195485),pk(USER_0))})";
+    "tr(UNSPENDABLE_KEY,{and_v(v:pk(ASP),pk(USER_1)),and_v(v:older(TIMEOUT),pk(USER_0))})";
 
 /// The Miniscript descriptor used for the default VTXO.
 ///
@@ -113,7 +112,7 @@ const DEFAULT_VTXO_DESCRIPTOR_TEMPLATE_MINISCRIPT: &str =
 
 /// tr(unspendable, { and(pk(user), pk(asp)), and(older(timeout), pk(user)) })
 const DEFAULT_VTXO_DESCRIPTOR_TEMPLATE: &str =
-    "tr(UNSPENDABLE_KEY,{ and(pk(USER), pk(ASP)), and(older(TIMEOUT), pk(USER)) })";
+    "tr(UNSPENDABLE_KEY,{and(pk(USER),pk(ASP)),and(older(TIMEOUT),pk(USER))})";
 
 const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
 
@@ -172,8 +171,17 @@ pub struct DefaultVtxoScript {
 
 impl DefaultVtxoScript {
     pub fn new(asp: XOnlyPublicKey, owner: XOnlyPublicKey, exit_delay: u64) -> Result<Self, Error> {
-        let vtxo_descriptor =
-            DEFAULT_VTXO_DESCRIPTOR_TEMPLATE_MINISCRIPT.replace("TIMEOUT", &exit_delay.to_string());
+        let vtxo_descriptor = {
+            let exit_delay =
+                bitcoin::Sequence::from_seconds_floor(exit_delay as u32).expect("valid");
+            let exit_delay = exit_delay.to_relative_lock_time().expect("relative");
+
+            DEFAULT_VTXO_DESCRIPTOR_TEMPLATE_MINISCRIPT.replace(
+                "TIMEOUT",
+                exit_delay.to_consensus_u32().to_string().as_str(),
+            )
+        };
+
         let descriptor = Descriptor::<String>::from_str(&vtxo_descriptor).unwrap();
 
         debug_assert!(descriptor.sanity_check().is_ok());
@@ -280,11 +288,13 @@ where
 
         let vtxo_script = DefaultVtxoScript::new(asp, owner, exit_delay).unwrap();
 
-        let vtxo_tap_key = vtxo_script.descriptor.internal_key();
+        let spend_info = &vtxo_script.descriptor.spend_info();
+
+        let vtxo_tap_key = spend_info.output_key();
 
         let network = asp_info.network;
 
-        let ark_address = ArkAddress::new(network, asp, *vtxo_tap_key);
+        let ark_address = ArkAddress::new(network, asp, vtxo_tap_key.to_inner());
 
         Ok((ark_address, vtxo_script))
     }
@@ -917,7 +927,12 @@ where
         }
     }
 
-    pub async fn send_oor(&self, address: ArkAddress, amount: Amount) -> Result<(), Error> {
+    pub async fn send_oor(
+        &self,
+        secp: &Secp256k1<All>,
+        address: ArkAddress,
+        amount: Amount,
+    ) -> Result<Txid, Error> {
         // 1. get spendable VTXOs & script/descriptor for each VTXO
         let spendable_vtxos_and_script = self.spendable_vtxos().await?;
 
@@ -981,7 +996,7 @@ where
                     forfeit_leaf_hash: leaf_hash.to_lower_hex_string(),
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
 
         let mut outputs = vec![Output {
             address: address.encode().unwrap(),
@@ -994,11 +1009,95 @@ where
                 amount: change_amount.to_sat(),
             })
         }
-        let create_payment_request = CreatePaymentRequest { inputs, outputs };
-        let mut client = self.inner.inner.clone().unwrap();
-        client.create_payment(create_payment_request).await.unwrap();
 
-        Ok(())
+        let mut client = self.inner.inner.clone().unwrap();
+        let res = client
+            .create_payment(CreatePaymentRequest { inputs, outputs })
+            .await
+            .unwrap();
+
+        let signed_redeem_psbt = res.into_inner().signed_redeem_tx;
+
+        let base64 = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        );
+
+        let mut signed_redeem_psbt = {
+            let psbt = base64.decode(&signed_redeem_psbt).unwrap();
+
+            Psbt::deserialize(&psbt).unwrap()
+        };
+
+        let prevouts = signed_redeem_psbt
+            .inputs
+            .iter()
+            .filter_map(|i| i.witness_utxo.clone())
+            .collect::<Vec<_>>();
+
+        // Sign all redeem transaction inputs (could be multiple VTXOs!).
+        for (vtxo, vtxo_script) in selected_coins.iter() {
+            for (i, psbt_input) in signed_redeem_psbt.inputs.iter_mut().enumerate() {
+                let psbt_input_outpoint = signed_redeem_psbt.unsigned_tx.input[i].previous_output;
+
+                let vtxo_outpoint = vtxo.outpoint.expect("outpoint");
+                if psbt_input_outpoint == vtxo_outpoint {
+                    // In the case of input VTXOs, we are actually using a script spend path.
+                    let (forfeit_script, forfeit_control_block) = vtxo_script.forfeit_spend_info();
+
+                    let leaf_version = forfeit_control_block.leaf_version;
+                    psbt_input.tap_scripts = BTreeMap::from_iter([(
+                        forfeit_control_block,
+                        (forfeit_script.clone(), leaf_version),
+                    )]);
+
+                    let prevouts = Prevouts::All(&prevouts);
+
+                    let leaf_hash = TapLeafHash::from_script(&forfeit_script, leaf_version);
+
+                    let tap_sighash = SighashCache::new(&signed_redeem_psbt.unsigned_tx)
+                        .taproot_script_spend_signature_hash(
+                            i,
+                            &prevouts,
+                            leaf_hash,
+                            bitcoin::TapSighashType::Default,
+                        )
+                        .unwrap();
+
+                    let msg =
+                        secp256k1::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
+
+                    let sig = secp.sign_schnorr_no_aux_rand(&msg, &self.kp);
+                    let pk = self.kp.x_only_public_key().0;
+
+                    if secp.verify_schnorr(&sig, &msg, &pk).is_err() {
+                        tracing::error!("Failed to verify own redeem signature");
+
+                        return Err(Error::Unknown);
+                    }
+
+                    let sig = taproot::Signature {
+                        signature: sig,
+                        sighash_type: TapSighashType::Default,
+                    };
+
+                    psbt_input.tap_script_sigs = BTreeMap::from_iter([((pk, leaf_hash), sig)]);
+                }
+            }
+        }
+
+        let txid = signed_redeem_psbt.unsigned_tx.compute_txid();
+
+        let signed_redeem_psbt = base64.encode(signed_redeem_psbt.serialize());
+
+        client
+            .complete_payment(CompletePaymentRequest {
+                signed_redeem_tx: signed_redeem_psbt,
+            })
+            .await
+            .unwrap();
+
+        Ok(txid)
     }
 }
 
@@ -1305,7 +1404,10 @@ pub mod tests {
         let amount = Amount::from_sat(100_000);
         tracing::debug!("Alice is sending {amount} to Bob offchain...");
 
-        alice.send_oor(bob_offchain_address, amount).await.unwrap();
+        alice
+            .send_oor(&secp, bob_offchain_address, amount)
+            .await
+            .unwrap();
 
         let bob_offchain_balance = bob.offchain_balance().await.unwrap();
         tracing::debug!("Post payment: Bob offchain balance: {bob_offchain_balance}");

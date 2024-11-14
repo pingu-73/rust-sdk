@@ -27,9 +27,14 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
     fn try_from(value: generated::ark::v1::GetInfoResponse) -> Result<Self, Self::Error> {
         // TODO: Use descriptor from ASP when the ASP supports Miniscript.
         // let boarding_descriptor = asp_info.boarding_descriptor_template.replace(' ', "");
+        let round_lifetime =
+            bitcoin::Sequence::from_seconds_floor(value.round_lifetime as u32).expect("valid");
+        let round_lifetime = round_lifetime.to_relative_lock_time().expect("relative");
 
-        let boarding_descriptor = BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT
-            .replace("TIMEOUT", value.round_lifetime.to_string().as_str());
+        let boarding_descriptor = BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT.replace(
+            "TIMEOUT",
+            round_lifetime.to_consensus_u32().to_string().as_str(),
+        );
         let boarding_descriptor = Descriptor::<String>::from_str(&boarding_descriptor).unwrap();
         let orig_boarding_descriptor = value.boarding_descriptor_template;
 
