@@ -1,4 +1,5 @@
 use crate::ark_address::ArkAddress;
+use crate::asp::ListVtxo;
 use crate::asp::Vtxo;
 use crate::coinselect::coin_select;
 use crate::generated::ark::v1::CompletePaymentRequest;
@@ -20,7 +21,9 @@ use crate::musig::from_zkp_xonly;
 use crate::musig::to_zkp_pk;
 use crate::script::CsvSigClosure;
 use base64::Engine;
+use bitcoin::absolute::LockTime;
 use bitcoin::consensus::deserialize;
+use bitcoin::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
 use bitcoin::hex::FromHex;
@@ -35,15 +38,21 @@ use bitcoin::sighash::SighashCache;
 use bitcoin::taproot;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
+use bitcoin::transaction;
 use bitcoin::Address;
+use bitcoin::AddressType;
 use bitcoin::Amount;
+use bitcoin::FeeRate;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::ScriptBuf;
 use bitcoin::TapLeafHash;
 use bitcoin::TapSighashType;
 use bitcoin::Transaction;
+use bitcoin::TxIn;
+use bitcoin::TxOut;
 use bitcoin::Txid;
+use bitcoin::VarInt;
 use bitcoin::XOnlyPublicKey;
 use error::Error;
 use futures::FutureExt;
@@ -248,7 +257,7 @@ pub trait Blockchain {
     fn find_outpoint(
         &self,
         address: Address,
-    ) -> impl std::future::Future<Output = Result<(OutPoint, Amount), Error>> + Send;
+    ) -> impl std::future::Future<Output = Result<Option<(OutPoint, Amount)>, Error>> + Send;
 }
 
 impl<B> Client<B>
@@ -356,6 +365,18 @@ where
         Ok(vec![address])
     }
 
+    pub async fn list_vtxos(&self) -> Result<Vec<ListVtxo>, Error> {
+        let addresses = self.get_offchain_addresses()?;
+
+        let mut vtxos = vec![];
+        for (address, _) in addresses.into_iter() {
+            let list = self.inner.list_vtxos(address).await?;
+            vtxos.push(list);
+        }
+
+        Ok(vtxos)
+    }
+
     pub async fn spendable_vtxos(&self) -> Result<Vec<(Vec<Vtxo>, DefaultVtxoScript)>, Error> {
         let addresses = self.get_offchain_addresses()?;
 
@@ -389,27 +410,45 @@ where
         R: Rng + CryptoRng,
     {
         // Get all known boarding addresses.
-        let boarding_addresses = self.get_boarding_addresses()?;
+        let boarding_addresses = self.get_boarding_addresses().unwrap();
 
         let mut boarding_outputs: Vec<(OutPoint, BoardingAddress)> = Vec::new();
         let mut total_amount = Amount::ZERO;
 
         // Find outpoints for each boarding address.
         for boarding_address in boarding_addresses {
-            let (outpoint, amount) = self
+            if let Some((outpoint, amount)) = self
                 .blockchain
                 .find_outpoint(boarding_address.address.clone())
-                .await?;
-
-            // TODO: Filter out expired outpoints.
-            boarding_outputs.push((outpoint, boarding_address));
-            total_amount += amount;
+                .await
+                .unwrap()
+            {
+                // TODO: Filter out expired outpoints.
+                boarding_outputs.push((outpoint, boarding_address));
+                total_amount += amount;
+            }
         }
 
-        // TODO: Include settlement of VTXOs.
+        let spendable_vtxos = self.spendable_vtxos().await.unwrap();
+
+        for (vtxos, _) in spendable_vtxos.iter() {
+            total_amount += vtxos
+                .iter()
+                .fold(Amount::ZERO, |acc, vtxo| acc + vtxo.amount)
+        }
 
         // Get off-chain address and send all funds to this address, no change output 🦄
         let (address, _) = self.get_offchain_address()?;
+
+        let vtxo_inputs = spendable_vtxos
+            .into_iter()
+            .flat_map(|(vtxos, descriptor)| {
+                vtxos
+                    .into_iter()
+                    .map(|vtxo| (vtxo, descriptor.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
 
         tracing::info!(offchain_adress = ?address.encode(), ?boarding_outputs, "Attempting to board the ark");
 
@@ -424,6 +463,7 @@ where
                     secp_zkp,
                     rng,
                     boarding_outputs.clone(),
+                    vtxo_inputs.clone(),
                     address,
                     total_amount,
                 )
@@ -436,18 +476,22 @@ where
                     tracing::error!("Failed to join the round: {e:?}. Retrying");
                 }
             }
+
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         };
         tracing::info!(txid, "Boarding success");
 
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn join_next_ark_round<R>(
         &self,
         secp: &Secp256k1<All>,
         secp_zkp: &zkp::Secp256k1<zkp::All>,
         rng: &mut R,
-        boarding_outputs: Vec<(OutPoint, BoardingAddress)>,
+        boarding_inputs: Vec<(OutPoint, BoardingAddress)>,
+        vtxo_inputs: Vec<(Vtxo, DefaultVtxoScript)>,
         address: ArkAddress,
         total_amount: Amount,
     ) -> Result<String, Error>
@@ -460,23 +504,39 @@ where
         // Generate an ephemeral key.
         let ephemeral_kp = Keypair::new(secp, rng);
 
-        let inputs = boarding_outputs
-            .clone()
-            .into_iter()
-            .map(|(o, d)| Input {
+        let inputs_api = {
+            let boarding_inputs = boarding_inputs.clone().into_iter().map(|(o, d)| Input {
                 outpoint: Some(Outpoint {
                     txid: o.txid.to_string(),
                     vout: o.vout,
                 }),
                 descriptor: d.ark_descriptor,
-            })
-            .collect();
+            });
+
+            let vtxo_inputs = vtxo_inputs.clone().into_iter().map(|(o, d)| Input {
+                outpoint: o.outpoint.map(|o| Outpoint {
+                    txid: o.txid.to_string(),
+                    vout: o.vout,
+                }),
+                descriptor: d.ark_descriptor,
+            });
+
+            boarding_inputs.chain(vtxo_inputs).collect()
+        };
+
+        let boarding_inputs: Vec<_> = boarding_inputs
+            .clone()
+            .into_iter()
+            .map(|(outpoint, d)| (outpoint, d.forfeit_spend_info()))
+            .collect::<Vec<_>>();
+
+        let vtxo_inputs = vtxo_inputs.clone().into_iter().collect::<Vec<_>>();
 
         // TODO: Move this into our API layer.
         let mut client = self.inner.inner.clone().unwrap();
         let response = client
             .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
-                inputs,
+                inputs: inputs_api,
                 ephemeral_pubkey: Some(ephemeral_kp.public_key().to_string()),
             })
             .await
@@ -494,7 +554,7 @@ where
             .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
                 id: register_inputs_for_next_round_id.clone(),
                 outputs: vec![Output {
-                    address: address.encode()?,
+                    address: address.encode().unwrap(),
                     amount: total_amount.to_sat(),
                 }],
             })
@@ -508,13 +568,20 @@ where
             let round_id = register_inputs_for_next_round_id.clone();
             async move {
                 loop {
-                    let response = client
+                    let res = client
                         .ping(PingRequest {
                             payment_id: round_id.clone(),
                         })
-                        .await
-                        .unwrap();
-                    tracing::trace!(?response, "Sent ping");
+                        .await;
+
+                    match res {
+                        Ok(msg) => {
+                            tracing::trace!("Message via ping: {msg:?}");
+                        }
+                        Err(ref e) => {
+                            tracing::warn!("Error via ping: {e:?}");
+                        }
+                    }
 
                     tokio::time::sleep(Duration::from_millis(5000)).await
                 }
@@ -798,8 +865,14 @@ where
                             }
                             tracing::debug!(?e, "Round finalization started");
 
-                            // TODO: Sign forfeit TXs based on VTXOs. Skipping bc we are only
-                            // boarding UTXOs for now.
+                            let signed_forfeit_psbts = self
+                                .create_and_sign_forfeit_txs(
+                                    secp,
+                                    vtxo_inputs.clone(),
+                                    e.connectors,
+                                    e.min_relay_fee_rate,
+                                )
+                                .unwrap();
 
                             let base64 = base64::engine::GeneralPurpose::new(
                                 &base64::alphabet::STANDARD,
@@ -821,7 +894,9 @@ where
                             // Sign round transaction inputs that belong to us. For every output we
                             // are boarding, we look through the round transaction inputs to find a
                             // matching input.
-                            for (boarding_outpoint, boarding_address) in boarding_outputs.iter() {
+                            for (boarding_outpoint, (forfeit_script, forfeit_control_block)) in
+                                boarding_inputs.iter()
+                            {
                                 for (i, input) in round_psbt.inputs.iter_mut().enumerate() {
                                     let previous_outpoint =
                                         round_psbt.unsigned_tx.input[i].previous_output;
@@ -829,19 +904,17 @@ where
                                     if &previous_outpoint == boarding_outpoint {
                                         // In the case of a boarding output, we are actually using a
                                         // script spend path.
-                                        let (forfeit_script, forfeit_control_block) =
-                                            boarding_address.forfeit_spend_info();
 
                                         let leaf_version = forfeit_control_block.leaf_version;
                                         input.tap_scripts = BTreeMap::from_iter([(
-                                            forfeit_control_block,
+                                            forfeit_control_block.clone(),
                                             (forfeit_script.clone(), leaf_version),
                                         )]);
 
                                         let prevouts = Prevouts::All(&prevouts);
 
                                         let leaf_hash =
-                                            TapLeafHash::from_script(&forfeit_script, leaf_version);
+                                            TapLeafHash::from_script(forfeit_script, leaf_version);
 
                                         let tap_sighash =
                                             SighashCache::new(&round_psbt.unsigned_tx)
@@ -879,11 +952,15 @@ where
                                 }
                             }
 
+                            let signed_forfeit_psbts = signed_forfeit_psbts
+                                .into_iter()
+                                .map(|psbt| base64.encode(psbt.serialize()))
+                                .collect();
                             let signed_round_psbt = base64.encode(round_psbt.serialize());
 
                             client
                                 .submit_signed_forfeit_txs(SubmitSignedForfeitTxsRequest {
-                                    signed_forfeit_txs: Vec::new(),
+                                    signed_forfeit_txs: signed_forfeit_psbts,
                                     signed_round_tx: Some(signed_round_psbt),
                                 })
                                 .await
@@ -1099,6 +1176,264 @@ where
 
         Ok(txid)
     }
+
+    fn create_and_sign_forfeit_txs(
+        &self,
+        secp: &Secp256k1<All>,
+        vtxo_inputs: Vec<(Vtxo, DefaultVtxoScript)>,
+        connectors: Vec<String>,
+        min_relay_fee_rate_sats_per_kvb: i64,
+    ) -> Result<Vec<Psbt>, Error> {
+        const FORFEIT_TX_CONNECTOR_INDEX: usize = 0;
+        const FORFEIT_TX_VTXO_INDEX: usize = 1;
+
+        let asp_info = self.asp_info.clone().unwrap();
+
+        let base64 = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        );
+
+        // Is there such a thing as a connector TX? I think not! The connector TX is actually a
+        // round TX, but here we only care about the connector outputs in it i.e. the dust outputs.
+        let connector_psbts = connectors
+            .into_iter()
+            .map(|psbt| {
+                let psbt = base64.decode(&psbt).unwrap();
+                Psbt::deserialize(&psbt).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let fee_rate_sats_per_kvb = min_relay_fee_rate_sats_per_kvb as u64;
+        let connector_amount = asp_info.dust;
+
+        let forfeit_address = bitcoin::Address::from_str(&asp_info.forfeit_address).unwrap();
+        let forfeit_address = forfeit_address.require_network(asp_info.network).unwrap();
+
+        let mut signed_forfeit_psbts = Vec::new();
+        for (vtxo, vtxo_descriptor) in vtxo_inputs.iter() {
+            let min_relay_fee = self
+                .compute_forfeit_min_relay_fee(
+                    fee_rate_sats_per_kvb,
+                    vtxo_descriptor,
+                    forfeit_address.clone(),
+                )
+                .unwrap();
+
+            let mut connector_inputs = Vec::new();
+            for connector_psbt in connector_psbts.iter() {
+                let txid = connector_psbt.unsigned_tx.compute_txid();
+                for (i, connector_output) in connector_psbt.unsigned_tx.output.iter().enumerate() {
+                    if connector_output.value == connector_amount {
+                        connector_inputs.push((
+                            OutPoint {
+                                txid,
+                                vout: i as u32,
+                            },
+                            connector_output,
+                        ));
+                    }
+                }
+            }
+
+            let forfeit_output = TxOut {
+                value: vtxo.amount + connector_amount - min_relay_fee,
+                script_pubkey: forfeit_address.script_pubkey(),
+            };
+
+            let mut forfeit_psbts = Vec::new();
+            // It seems like we are signing multiple forfeit transactions per VTXO i.e. it seems
+            // like the ASP will be able to publish different versions of the same forfeit
+            // transaction. This might be useful because it gives the ASP more flexibility?
+            for (connector_outpoint, connector_output) in connector_inputs.into_iter() {
+                let mut forfeit_psbt = Psbt::from_unsigned_tx(Transaction {
+                    version: transaction::Version::TWO,
+                    lock_time: LockTime::ZERO, // Maybe?
+                    input: vec![
+                        TxIn {
+                            previous_output: connector_outpoint,
+                            ..Default::default()
+                        },
+                        TxIn {
+                            previous_output: vtxo.outpoint.expect("outpoint"),
+                            ..Default::default()
+                        },
+                    ],
+                    output: vec![forfeit_output.clone()],
+                })
+                .unwrap();
+
+                forfeit_psbt.inputs[FORFEIT_TX_CONNECTOR_INDEX].witness_utxo =
+                    Some(connector_output.clone());
+
+                forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].witness_utxo = Some(TxOut {
+                    value: vtxo.amount,
+                    script_pubkey: vtxo_descriptor.descriptor.script_pubkey(),
+                });
+
+                forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].sighash_type =
+                    Some(TapSighashType::Default.into());
+
+                forfeit_psbts.push(forfeit_psbt);
+            }
+
+            for forfeit_psbt in forfeit_psbts.iter_mut() {
+                let (forfeit_script, forfeit_control_block) = vtxo_descriptor.forfeit_spend_info();
+
+                let leaf_version = forfeit_control_block.leaf_version;
+                forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].tap_scripts = BTreeMap::from_iter([(
+                    forfeit_control_block,
+                    (forfeit_script.clone(), leaf_version),
+                )]);
+
+                let prevouts = forfeit_psbt
+                    .inputs
+                    .iter()
+                    .filter_map(|i| i.witness_utxo.clone())
+                    .collect::<Vec<_>>();
+                let prevouts = Prevouts::All(&prevouts);
+
+                let leaf_hash = TapLeafHash::from_script(&forfeit_script, leaf_version);
+
+                let tap_sighash = SighashCache::new(&forfeit_psbt.unsigned_tx)
+                    .taproot_script_spend_signature_hash(
+                        FORFEIT_TX_VTXO_INDEX,
+                        &prevouts,
+                        leaf_hash,
+                        bitcoin::TapSighashType::Default,
+                    )
+                    .unwrap();
+
+                let msg =
+                    secp256k1::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
+
+                let sig = secp.sign_schnorr_no_aux_rand(&msg, &self.kp);
+                let pk = self.kp.x_only_public_key().0;
+
+                if secp.verify_schnorr(&sig, &msg, &pk).is_err() {
+                    tracing::error!("Failed to verify own forfeit signature");
+
+                    return Err(Error::Unknown);
+                }
+
+                let sig = taproot::Signature {
+                    signature: sig,
+                    sighash_type: TapSighashType::Default,
+                };
+
+                forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].tap_script_sigs =
+                    BTreeMap::from_iter([((pk, leaf_hash), sig)]);
+
+                signed_forfeit_psbts.push(forfeit_psbt.clone());
+            }
+        }
+
+        Ok(signed_forfeit_psbts)
+    }
+
+    fn compute_forfeit_min_relay_fee(
+        &self,
+        fee_rate_sats_per_kvb: u64,
+        vtxo_descriptor: &DefaultVtxoScript,
+        forfeit_address: Address,
+    ) -> Result<Amount, Error> {
+        const INPUT_SIZE: u64 = 32 + 4 + 1 + 4;
+        const P2PKH_SCRIPT_SIG_SIZE: u64 = 1 + 73 + 1 + 33;
+        const FORFEIT_LEAF_WITNESS_SIZE: u64 = 64 * 2; // 2 signatures for multisig.
+        const TAPROOT_BASE_CONTROL_BLOCK_WITNESS_SIZE: u64 = 33;
+        const BASE_OUTPUT_SIZE: u64 = 8 + 1;
+        const P2PKH_SIZE: u64 = 25;
+        const P2SH_SIZE: u64 = 23;
+        const P2WKH_SIZE: u64 = 1 + 1 + 20;
+        const P2WSH_SIZE: u64 = 1 + 1 + 32;
+        const P2TR_SIZE: u64 = 34;
+        const P2PKH_OUTPUT_SIZE: u64 = BASE_OUTPUT_SIZE + P2PKH_SIZE;
+        const P2SH_OUTPUT_SIZE: u64 = BASE_OUTPUT_SIZE + P2SH_SIZE;
+        const P2WKH_OUTPUT_SIZE: u64 = BASE_OUTPUT_SIZE + P2WKH_SIZE;
+        const P2WSH_OUTPUT_SIZE: u64 = BASE_OUTPUT_SIZE + P2WSH_SIZE;
+        const P2TR_OUTPUT_SIZE: u64 = BASE_OUTPUT_SIZE + P2TR_SIZE;
+        const BASE_TX_SIZE: u64 = 4 + 4;
+
+        let n_inputs = 2;
+        let n_outputs = 1;
+        let mut input_size = 0;
+        let mut witness_size = 0;
+        let mut output_size = 0;
+
+        // 1 connector input. We use P2PKH for this!
+        input_size += INPUT_SIZE + P2PKH_SCRIPT_SIG_SIZE;
+        witness_size += 1;
+
+        // 1 VTXO input.
+        input_size += INPUT_SIZE;
+
+        let spend_info = &vtxo_descriptor.descriptor.spend_info();
+        let ((biggest_script, leaf_version), _) = spend_info
+            .script_map()
+            .iter()
+            .max_by_key(|((script, leaf_version), _)| {
+                let control_block = spend_info
+                    .control_block(&(script.clone(), *leaf_version))
+                    .expect("control block");
+
+                control_block.size() + script.len()
+            })
+            .expect("at least one");
+
+        let control_block = spend_info
+            .control_block(&(biggest_script.clone(), *leaf_version))
+            .expect("control block");
+
+        // We add 1 byte for the total number of witness elements.
+        //
+        // 1 byte for the length of the element plus the element itself.
+        let control_block_witness_size = 1
+            + TAPROOT_BASE_CONTROL_BLOCK_WITNESS_SIZE
+            + 1
+            + (biggest_script.len() as u64)
+            + 1
+            + (control_block.merkle_branch.concat().len() as u64);
+
+        witness_size += FORFEIT_LEAF_WITNESS_SIZE + control_block_witness_size;
+
+        match forfeit_address.address_type() {
+            Some(AddressType::P2pkh) => {
+                output_size += P2PKH_OUTPUT_SIZE;
+            }
+            Some(AddressType::P2sh) => {
+                output_size += P2SH_OUTPUT_SIZE;
+            }
+            Some(AddressType::P2wpkh) => {
+                output_size += P2WKH_OUTPUT_SIZE;
+            }
+            Some(AddressType::P2wsh) => {
+                output_size += P2WSH_OUTPUT_SIZE;
+            }
+            Some(AddressType::P2tr) => {
+                output_size += P2TR_OUTPUT_SIZE;
+            }
+            _ => unreachable!("Unless they add new witness versions"),
+        }
+
+        let input_count = VarInt(n_inputs).size() as u64;
+        let output_count = VarInt(n_outputs).size() as u64;
+        let tx_size_stripped = BASE_TX_SIZE + input_count + input_size + output_count + output_size;
+
+        let weight_wu = tx_size_stripped * WITNESS_SCALE_FACTOR as u64;
+        let weight_wu = weight_wu + witness_size;
+
+        let weight_vb = weight_wu as f64 / 4.0;
+
+        // 1012 sat/kvb == 1012/4 sat/kwu
+        let fee_rate = FeeRate::from_sat_per_kwu(fee_rate_sats_per_kvb / 4);
+
+        let fee = fee_rate.fee_vb(weight_vb.ceil() as u64).expect("amount");
+
+        // FIXME: The `lnd` dependency in go is rounding down and `rust-bitcoin` is rounding up!
+        let fee = fee - Amount::ONE_SAT;
+
+        Ok(fee)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1310,10 +1645,10 @@ pub mod tests {
         async fn find_outpoint(
             &self,
             address: bitcoin::Address,
-        ) -> Result<(OutPoint, Amount), Error> {
+        ) -> Result<Option<(OutPoint, Amount)>, Error> {
             let guard = self.utxos.lock().unwrap();
-            let value = guard.get(&address).ok_or(Error::Unknown)?;
-            Ok(*value)
+            let value = guard.get(&address);
+            Ok(value.copied())
         }
     }
 
@@ -1398,11 +1733,17 @@ pub mod tests {
         let bob = setup_client("bob".to_string(), bob_keypair, nigiri.clone()).await;
 
         let bob_offchain_balance = bob.offchain_balance().await.unwrap();
-        tracing::debug!("Pre payment: Bob offchain balance: {bob_offchain_balance}");
+        let bob_vtxos = bob.list_vtxos().await.unwrap();
+        tracing::debug!(
+            ?bob_vtxos,
+            "Pre payment: Bob offchain balance: {bob_offchain_balance}"
+        );
 
         let (bob_offchain_address, _) = bob.get_offchain_address().unwrap();
         let amount = Amount::from_sat(100_000);
         tracing::debug!("Alice is sending {amount} to Bob offchain...");
+
+        bob.list_vtxos().await.unwrap();
 
         alice
             .send_oor(&secp, bob_offchain_address, amount)
@@ -1410,10 +1751,25 @@ pub mod tests {
             .unwrap();
 
         let bob_offchain_balance = bob.offchain_balance().await.unwrap();
-        tracing::debug!("Post payment: Bob offchain balance: {bob_offchain_balance}");
+        let bob_vtxos = bob.list_vtxos().await.unwrap();
+        tracing::debug!(
+            ?bob_vtxos,
+            "Post payment: Bob offchain balance: {bob_offchain_balance}"
+        );
 
         let alice_offchain_balance = alice.offchain_balance().await.unwrap();
         tracing::debug!("Post payment: Alice offchain balance: {alice_offchain_balance}");
+
+        bob.board(&secp, &secp_zkp, &mut rng).await.unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+        let bob_offchain_balance = bob.offchain_balance().await.unwrap();
+        let bob_vtxos = bob.list_vtxos().await.unwrap();
+        tracing::debug!(
+            ?bob_vtxos,
+            "Post settlement: Bob offchain balance: {bob_offchain_balance}"
+        );
     }
 
     pub fn init_tracing() {
