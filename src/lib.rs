@@ -7,6 +7,7 @@ use crate::generated::ark::v1::AsyncPaymentInput;
 use crate::generated::ark::v1::CompletePaymentRequest;
 use crate::generated::ark::v1::CreatePaymentRequest;
 use crate::generated::ark::v1::GetEventStreamRequest;
+use crate::generated::ark::v1::GetRoundRequest;
 use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::Outpoint;
 use crate::generated::ark::v1::Output;
@@ -19,6 +20,7 @@ use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::generated::ark::v1::Tree;
 use crate::musig::from_zkp_xonly;
 use crate::musig::to_zkp_pk;
+use crate::script::extract_sequence_from_csv_sig_closure;
 use crate::script::CsvSigClosure;
 use base64::Engine;
 use bitcoin::absolute::LockTime;
@@ -31,6 +33,7 @@ use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
 use bitcoin::opcodes;
+use bitcoin::relative;
 use bitcoin::secp256k1;
 use bitcoin::secp256k1::All;
 use bitcoin::sighash::Prevouts;
@@ -53,6 +56,7 @@ use bitcoin::TxIn;
 use bitcoin::TxOut;
 use bitcoin::Txid;
 use bitcoin::VarInt;
+use bitcoin::Witness;
 use bitcoin::XOnlyPublicKey;
 use error::Error;
 use futures::FutureExt;
@@ -65,6 +69,7 @@ use rand::CryptoRng;
 use rand::Rng;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
@@ -271,6 +276,22 @@ pub trait Blockchain {
         &self,
         address: Address,
     ) -> impl std::future::Future<Output = Result<Option<(OutPoint, Amount)>, Error>> + Send;
+
+    fn find_tx(
+        &self,
+        txid: &Txid,
+    ) -> impl std::future::Future<Output = Result<Option<Transaction>, Error>> + Send;
+
+    fn broadcast(
+        &self,
+        tx: &Transaction,
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send;
+}
+
+struct RedeemBranch {
+    vtxo: Vtxo,
+    branch: Vec<Psbt>,
+    lifetime: Duration,
 }
 
 impl<B> Client<B>
@@ -1466,6 +1487,173 @@ where
         Ok(signed_forfeit_psbts)
     }
 
+    pub async fn unilateral_off_board(&self) -> Result<(), Error> {
+        let base64 = &base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        );
+
+        // FIXME: We must filter out VTXOS that have not expired yet! We can use the `RedeemBranch`
+        // type for that.
+        let vtxos = self.spendable_vtxos().await.unwrap();
+
+        let mut client = self.inner.inner.clone().unwrap();
+
+        let mut congestion_trees = HashMap::new();
+        let mut redeem_branches = HashMap::new();
+        for (vtxo_list, _) in vtxos.into_iter() {
+            for vtxo in vtxo_list.into_iter() {
+                // TODO: Handle exit for pending changes (taken from go implementation).
+                if !vtxo.redeem_tx.is_empty() {
+                    continue;
+                }
+
+                let round_txid = &vtxo.round_txid;
+                if !congestion_trees.contains_key(round_txid) {
+                    let round = client
+                        .get_round(GetRoundRequest {
+                            txid: round_txid.clone(),
+                        })
+                        .await
+                        .unwrap()
+                        .into_inner()
+                        .round
+                        .unwrap();
+
+                    congestion_trees
+                        .insert(round_txid.clone(), round.vtxo_tree.expect("we have one"));
+                }
+
+                let congestion_tree = congestion_trees.get(round_txid.as_str()).expect("is there");
+
+                let root = &congestion_tree.levels[0].nodes[0];
+
+                let psbt = base64.decode(&root.tx).unwrap();
+                let psbt = Psbt::deserialize(&psbt).unwrap();
+
+                for (_, (script, _)) in psbt.inputs[VTXO_INPUT_INDEX].tap_scripts.iter() {
+                    let lifetime = extract_sequence_from_csv_sig_closure(script).unwrap();
+                    let lifetime = match lifetime.to_relative_lock_time().unwrap() {
+                        relative::LockTime::Time(time) => {
+                            Duration::from_secs((time.value() * 512) as u64)
+                        }
+                        relative::LockTime::Blocks(_) => {
+                            unreachable!("Only seconds timelock is supported");
+                        }
+                    };
+
+                    let vtxo_txid = vtxo.outpoint.expect("outpoint").txid.to_string();
+                    let leaf_node = congestion_tree
+                        .levels
+                        .last()
+                        .expect("at least one")
+                        .nodes
+                        .iter()
+                        .find(|node| node.txid == vtxo_txid)
+                        .expect("leaf node");
+
+                    // Build the branch from our VTXO to the root of the VTXO tree.
+                    let mut branch = vec![leaf_node];
+                    while branch[0].txid != root.txid {
+                        let parent_node = congestion_tree
+                            .levels
+                            .iter()
+                            .find_map(|level| {
+                                level.nodes.iter().find(|node| node.txid == branch[0].txid)
+                            })
+                            .expect("parent");
+
+                        branch = [vec![parent_node], branch].concat()
+                    }
+
+                    let branch = branch
+                        .into_iter()
+                        .map(|node| {
+                            let psbt = base64.decode(&node.tx).unwrap();
+                            Psbt::deserialize(&psbt).unwrap()
+                        })
+                        .collect::<Vec<_>>();
+
+                    redeem_branches.insert(
+                        vtxo_txid,
+                        RedeemBranch {
+                            vtxo: vtxo.clone(),
+                            branch,
+                            lifetime,
+                        },
+                    );
+                }
+            }
+        }
+
+        let mut tx_set = HashSet::new();
+        let mut all_txs = Vec::new();
+        for redeem_branch in redeem_branches.values() {
+            let mut psbts_to_broadcast = Vec::new();
+
+            // We start from the bottom so that we can stop looking for parent TXs in the redeem
+            // path if we find a transaction on the blockchain.
+            for psbt in redeem_branch.branch.iter().rev() {
+                let txid = psbt.unsigned_tx.compute_txid();
+                match self.blockchain.find_tx(&txid).await.unwrap() {
+                    Some(_) => {
+                        tracing::debug!(%txid, "Transaction in redeem path already on chain");
+
+                        // We found all the transactions that need to be broadcast to get our VTXO.
+                        break;
+                    }
+                    None => {
+                        psbts_to_broadcast.push(psbt);
+                    }
+                }
+            }
+
+            // The transactions were inserted from leaf to root, so we must reverse the `Vec` to
+            // broadcast transactions in a valid order.
+            for psbt in psbts_to_broadcast.into_iter().rev() {
+                let input = psbt.inputs[VTXO_INPUT_INDEX].clone();
+                let tap_key_sig = match input.tap_key_sig {
+                    None => {
+                        tracing::error!("Missing taproot key spend signature");
+
+                        return Err(Error::Unknown);
+                    }
+                    Some(tap_key_sig) => tap_key_sig,
+                };
+
+                let mut psbt = psbt.clone();
+
+                psbt.inputs[VTXO_INPUT_INDEX].final_script_witness =
+                    Some(Witness::p2tr_key_spend(&tap_key_sig));
+
+                let tx = psbt.clone().extract_tx().unwrap();
+
+                let txid = tx.compute_txid();
+                if !tx_set.contains(&txid) {
+                    tx_set.insert(txid);
+                    all_txs.push(tx);
+                }
+            }
+        }
+
+        let all_txs_len = all_txs.len();
+        for (i, tx) in all_txs.iter().enumerate() {
+            let txid = tx.compute_txid();
+            tracing::info!(%txid, "Broadcasting VTXO transaction");
+
+            while let Err(e) = self.blockchain.broadcast(tx).await {
+                tracing::warn!(%txid, "Error broadcasting VTXO transaction: {e:?}");
+
+                // TODO: Should only retry specific errors, but the API is too rough atm.
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+
+            tracing::info!(%txid, i, total_txs = all_txs_len, "Broadcasted VTXO transaction");
+        }
+
+        Ok(())
+    }
+
     fn compute_forfeit_min_relay_fee(
         &self,
         fee_rate_sats_per_kvb: u64,
@@ -1808,6 +1996,18 @@ pub mod tests {
             }
 
             Ok(value.copied())
+        }
+
+        async fn find_tx(&self, _txid: &Txid) -> Result<Option<Transaction>, Error> {
+            todo!()
+        }
+
+        // TODO: Make sure we return a proper error here, so that we can retry if we encounter a
+        // `bad-txns-inputs-missingorspent` error.
+        async fn broadcast(&self, tx: &Transaction) -> Result<(), Error> {
+            self.esplora_client.broadcast(tx).unwrap();
+
+            Ok(())
         }
     }
 
