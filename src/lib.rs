@@ -2,7 +2,10 @@ use crate::ark_address::ArkAddress;
 use crate::asp::ListVtxo;
 use crate::asp::Vtxo;
 use crate::coinselect::coin_select;
+use crate::generated::ark::v1::get_event_stream_response;
+use crate::generated::ark::v1::AsyncPaymentInput;
 use crate::generated::ark::v1::CompletePaymentRequest;
+use crate::generated::ark::v1::CreatePaymentRequest;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::Outpoint;
@@ -14,9 +17,6 @@ use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::generated::ark::v1::Tree;
-use crate::generated::ark::v1::{
-    get_event_stream_response, AsyncPaymentInput, CreatePaymentRequest,
-};
 use crate::musig::from_zkp_xonly;
 use crate::musig::to_zkp_pk;
 use crate::script::CsvSigClosure;
@@ -42,6 +42,7 @@ use bitcoin::transaction;
 use bitcoin::Address;
 use bitcoin::AddressType;
 use bitcoin::Amount;
+use bitcoin::CompressedPublicKey;
 use bitcoin::FeeRate;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
@@ -253,6 +254,19 @@ impl DefaultVtxoScript {
     }
 }
 
+enum RoundOutputType {
+    Board {
+        to_address: ArkAddress,
+        to_amount: Amount,
+    },
+    OffBoard {
+        to_address: Address,
+        to_amount: Amount,
+        change_address: ArkAddress,
+        change_amount: Amount,
+    },
+}
+
 pub trait Blockchain {
     fn find_outpoint(
         &self,
@@ -312,6 +326,15 @@ where
         let address = self.get_offchain_address().unwrap();
 
         Ok(vec![address])
+    }
+
+    pub fn get_onchain_address(&self) -> Result<Address, Error> {
+        let pubkey = self.kp.public_key();
+        let info = self.asp_info.clone().unwrap();
+        let pubkey = bitcoin::key::CompressedPublicKey::try_from(pubkey.to_public_key()).unwrap();
+        let address = Address::p2wpkh(&pubkey, info.network);
+
+        Ok(address)
     }
 
     pub fn get_boarding_address(&self) -> Result<BoardingAddress, Error> {
@@ -409,10 +432,62 @@ where
     where
         R: Rng + CryptoRng,
     {
+        // Get off-chain address and send all funds to this address, no change output 🦄
+        let (to_address, _) = self.get_offchain_address()?;
+
+        let (boarding_inputs, vtxo_inputs, total_amount) =
+            self.prepare_round_transactions().await?;
+
+        tracing::info!(offchain_adress = ?to_address.encode(), ?boarding_inputs, "Attempting to board the ark");
+
+        // Joining a round is likely to fail depending on the timing, so we keep retrying.
+        //
+        // TODO: Consider not retrying on all errors. ATM the retry mechanism is way too quick as
+        // well. We should use backoff and only retry on ephemeral errors.
+
+        let txid = loop {
+            match self
+                .join_next_ark_round(
+                    secp,
+                    secp_zkp,
+                    rng,
+                    boarding_inputs.clone(),
+                    vtxo_inputs.clone(),
+                    RoundOutputType::Board {
+                        to_address,
+                        to_amount: total_amount,
+                    },
+                )
+                .await
+            {
+                Ok(txid) => {
+                    break txid;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to join the round: {e:?}. Retrying");
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        };
+        tracing::info!(txid, "Boarding success");
+        Ok(())
+    }
+
+    pub async fn prepare_round_transactions(
+        &self,
+    ) -> Result<
+        (
+            Vec<(OutPoint, BoardingAddress)>,
+            Vec<(Vtxo, DefaultVtxoScript)>,
+            Amount,
+        ),
+        Error,
+    > {
         // Get all known boarding addresses.
         let boarding_addresses = self.get_boarding_addresses().unwrap();
 
-        let mut boarding_outputs: Vec<(OutPoint, BoardingAddress)> = Vec::new();
+        let mut boarding_inputs: Vec<(OutPoint, BoardingAddress)> = Vec::new();
         let mut total_amount = Amount::ZERO;
 
         // Find outpoints for each boarding address.
@@ -424,7 +499,7 @@ where
                 .unwrap()
             {
                 // TODO: Filter out expired outpoints.
-                boarding_outputs.push((outpoint, boarding_address));
+                boarding_inputs.push((outpoint, boarding_address));
                 total_amount += amount;
             }
         }
@@ -437,9 +512,6 @@ where
                 .fold(Amount::ZERO, |acc, vtxo| acc + vtxo.amount)
         }
 
-        // Get off-chain address and send all funds to this address, no change output 🦄
-        let (address, _) = self.get_offchain_address()?;
-
         let vtxo_inputs = spendable_vtxos
             .into_iter()
             .flat_map(|(vtxos, descriptor)| {
@@ -450,22 +522,58 @@ where
             })
             .collect::<Vec<_>>();
 
-        tracing::info!(offchain_adress = ?address.encode(), ?boarding_outputs, "Attempting to board the ark");
+        Ok((boarding_inputs, vtxo_inputs, total_amount))
+    }
+
+    pub async fn off_board<R>(
+        &self,
+        secp: &Secp256k1<All>,
+        secp_zkp: &zkp::Secp256k1<zkp::All>,
+        rng: &mut R,
+        address: Address,
+        amount: Amount,
+        // TODO return a proper TxId type
+    ) -> Result<String, Error>
+    where
+        R: Rng + CryptoRng,
+    {
+        // Get off-chain address and send all funds to this address, no change output 🦄
+        let (change_address, _) = self.get_offchain_address()?;
+
+        let (_boarding_inputs, vtxo_inputs, total_amount) =
+            self.prepare_round_transactions().await?;
+
+        // FIXME: since we don't have a proper blockchain explorer and we don't want to board the
+        // same utxo twice, we simply set this to empty vec.
+        let boarding_inputs = vec![];
+        // FIXME: uggly hack to ignore the on-chain utxo
+        let total_amount = total_amount - Amount::ONE_BTC;
+
+        tracing::info!(
+            address = address.to_string(),
+            amount = amount.to_string(),
+            change_address = ?change_address.encode(),
+            ?boarding_inputs, "Attempting to off-board the ark");
 
         // Joining a round is likely to fail depending on the timing, so we keep retrying.
         //
         // TODO: Consider not retrying on all errors. ATM the retry mechanism is way too quick as
         // well. We should use backoff and only retry on ephemeral errors.
+
         let txid = loop {
             match self
                 .join_next_ark_round(
                     secp,
                     secp_zkp,
                     rng,
-                    boarding_outputs.clone(),
+                    boarding_inputs.clone(),
                     vtxo_inputs.clone(),
-                    address,
-                    total_amount,
+                    RoundOutputType::OffBoard {
+                        to_address: address.clone(),
+                        to_amount: amount,
+                        change_address,
+                        change_amount: total_amount.checked_sub(amount).unwrap(),
+                    },
                 )
                 .await
             {
@@ -477,11 +585,11 @@ where
                 }
             }
 
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
         };
         tracing::info!(txid, "Boarding success");
 
-        Ok(())
+        Ok(txid)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -492,8 +600,7 @@ where
         rng: &mut R,
         boarding_inputs: Vec<(OutPoint, BoardingAddress)>,
         vtxo_inputs: Vec<(Vtxo, DefaultVtxoScript)>,
-        address: ArkAddress,
-        total_amount: Amount,
+        output_type: RoundOutputType,
     ) -> Result<String, Error>
     // TODO: type the return type to TXID
     where
@@ -550,13 +657,37 @@ where
             "Registered for round"
         );
 
+        let mut outputs = vec![];
+
+        match output_type {
+            RoundOutputType::Board {
+                to_address,
+                to_amount,
+            } => outputs.push(Output {
+                address: to_address.encode().unwrap(),
+                amount: to_amount.to_sat(),
+            }),
+            RoundOutputType::OffBoard {
+                to_address,
+                to_amount,
+                change_address,
+                change_amount,
+            } => {
+                outputs.push(Output {
+                    address: to_address.to_string(),
+                    amount: to_amount.to_sat(),
+                });
+                outputs.push(Output {
+                    address: change_address.encode().unwrap(),
+                    amount: change_amount.to_sat(),
+                });
+            }
+        }
+
         client
             .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
                 id: register_inputs_for_next_round_id.clone(),
-                outputs: vec![Output {
-                    address: address.encode().unwrap(),
-                    amount: total_amount.to_sat(),
-                }],
+                outputs,
             })
             .await
             .unwrap();
@@ -769,7 +900,8 @@ where
 
                                     let nonce = nonce_tree[i][j];
 
-                                    // Equivalent to parsing the individual `MusigAggNonce` from a slice.
+                                    // Equivalent to parsing the individual `MusigAggNonce` from a
+                                    // slice.
                                     let agg_nonce = MusigAggNonce::new(secp_zkp, &[nonce]);
 
                                     let psbt = base64::engine::GeneralPurpose::new(
@@ -788,7 +920,8 @@ where
                                     let input_vout =
                                         tx.input[VTXO_INPUT_INDEX].previous_output.vout as usize;
 
-                                    // NOTE: It seems like we are doing this correctly (at least for the root VTXO).
+                                    // NOTE: It seems like we are doing this correctly (at least for
+                                    // the root VTXO).
                                     let prevout = if i == 0 {
                                         unsigned_round_tx.clone().unwrap().unsigned_tx.output
                                             [input_vout]
@@ -1769,6 +1902,27 @@ pub mod tests {
         tracing::debug!(
             ?bob_vtxos,
             "Post settlement: Bob offchain balance: {bob_offchain_balance}"
+        );
+
+        let onchain_address = alice.get_onchain_address().unwrap();
+
+        let alice_offchain_balance = alice.offchain_balance().await.unwrap();
+        tracing::debug!("Pre off-boarding: Alice offchain balance: {alice_offchain_balance}");
+        let txid = alice
+            .off_board(
+                &secp,
+                &secp_zkp,
+                &mut rng,
+                onchain_address,
+                Amount::ONE_BTC / 5,
+            )
+            .await
+            .unwrap();
+
+        let alice_offchain_balance = alice.offchain_balance().await.unwrap();
+        tracing::debug!(
+            txid,
+            "Post off-boarding: Alice offchain balance: {alice_offchain_balance}"
         );
     }
 
