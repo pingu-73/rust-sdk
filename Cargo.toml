@@ -10,6 +10,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(genproto)'] }
 base64 = "0.22.1"
 bech32 = "0.11"
 bitcoin = { version = "0.32.4", features = ["rand"] }
+esplora-client = { version = "0.10.0", features = ["async-https", "blocking-https"] }
 futures = "0.3.31"
 miniscript = "12"
 prost = "0.13.3"

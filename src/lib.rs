@@ -42,7 +42,6 @@ use bitcoin::transaction;
 use bitcoin::Address;
 use bitcoin::AddressType;
 use bitcoin::Amount;
-use bitcoin::CompressedPublicKey;
 use bitcoin::FeeRate;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
@@ -540,14 +539,8 @@ where
         // Get off-chain address and send all funds to this address, no change output 🦄
         let (change_address, _) = self.get_offchain_address()?;
 
-        let (_boarding_inputs, vtxo_inputs, total_amount) =
+        let (boarding_inputs, vtxo_inputs, total_amount) =
             self.prepare_round_transactions().await?;
-
-        // FIXME: since we don't have a proper blockchain explorer and we don't want to board the
-        // same utxo twice, we simply set this to empty vec.
-        let boarding_inputs = vec![];
-        // FIXME: uggly hack to ignore the on-chain utxo
-        let total_amount = total_amount - Amount::ONE_BTC;
 
         tracing::info!(
             address = address.to_string(),
@@ -1714,12 +1707,17 @@ pub mod tests {
 
     struct Nigiri {
         utxos: Mutex<HashMap<bitcoin::Address, (OutPoint, Amount)>>,
+        esplora_client: esplora_client::BlockingClient,
     }
 
     impl Nigiri {
         pub fn new() -> Self {
+            let builder = esplora_client::Builder::new("http://localhost:30000");
+            let esplora_client = builder.build_blocking();
+
             Self {
                 utxos: Mutex::new(HashMap::new()),
+                esplora_client,
             }
         }
 
@@ -1781,6 +1779,25 @@ pub mod tests {
         ) -> Result<Option<(OutPoint, Amount)>, Error> {
             let guard = self.utxos.lock().unwrap();
             let value = guard.get(&address);
+            if let Some((outpoint, _amount)) = value {
+                let option = self
+                    .esplora_client
+                    .get_output_status(&outpoint.txid, outpoint.vout as u64)
+                    .unwrap();
+                match option {
+                    None => {
+                        tracing::error!("No status for outpoint, taking cached results instead");
+                    }
+                    Some(status) => {
+                        tracing::debug!(?status, "Status of outpoint");
+
+                        if status.spent {
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
+
             Ok(value.copied())
         }
     }
