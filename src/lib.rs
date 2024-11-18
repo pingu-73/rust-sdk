@@ -437,13 +437,12 @@ where
         let (boarding_inputs, vtxo_inputs, total_amount) =
             self.prepare_round_transactions().await?;
 
-        tracing::info!(offchain_adress = ?to_address.encode(), ?boarding_inputs, "Attempting to board the ark");
+        tracing::info!(offchain_adress = %to_address.encode().unwrap(), ?boarding_inputs, "Attempting to board the ark");
 
         // Joining a round is likely to fail depending on the timing, so we keep retrying.
         //
         // TODO: Consider not retrying on all errors. ATM the retry mechanism is way too quick as
         // well. We should use backoff and only retry on ephemeral errors.
-
         let txid = loop {
             match self
                 .join_next_ark_round(
@@ -469,11 +468,77 @@ where
 
             tokio::time::sleep(Duration::from_secs(1)).await;
         };
-        tracing::info!(txid, "Boarding success");
+
+        tracing::info!(%txid, "Boarding success");
+
         Ok(())
     }
 
-    pub async fn prepare_round_transactions(
+    pub async fn off_board<R>(
+        &self,
+        secp: &Secp256k1<All>,
+        secp_zkp: &zkp::Secp256k1<zkp::All>,
+        rng: &mut R,
+        to_address: Address,
+        to_amount: Amount,
+    ) -> Result<Txid, Error>
+    where
+        R: Rng + CryptoRng,
+    {
+        let (change_address, _) = self.get_offchain_address()?;
+
+        let (boarding_inputs, vtxo_inputs, total_amount) =
+            self.prepare_round_transactions().await?;
+
+        let change_amount = total_amount.checked_sub(to_amount).unwrap();
+
+        tracing::info!(
+            %to_address,
+            %to_amount,
+            change_address = %change_address.encode().unwrap(),
+            %change_amount,
+            ?boarding_inputs,
+            "Attempting to off-board the ark"
+        );
+
+        // Joining a round is likely to fail depending on the timing, so we keep retrying.
+        //
+        // TODO: Consider not retrying on all errors. ATM the retry mechanism is way too quick as
+        // well. We should use backoff and only retry on ephemeral errors.
+        let txid = loop {
+            match self
+                .join_next_ark_round(
+                    secp,
+                    secp_zkp,
+                    rng,
+                    boarding_inputs.clone(),
+                    vtxo_inputs.clone(),
+                    RoundOutputType::OffBoard {
+                        to_address: to_address.clone(),
+                        to_amount,
+                        change_address,
+                        change_amount,
+                    },
+                )
+                .await
+            {
+                Ok(txid) => {
+                    break txid;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to join the round: {e:?}. Retrying");
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        };
+
+        tracing::info!(%txid, "Off-boarding success");
+
+        Ok(txid)
+    }
+
+    async fn prepare_round_transactions(
         &self,
     ) -> Result<
         (
@@ -524,67 +589,6 @@ where
         Ok((boarding_inputs, vtxo_inputs, total_amount))
     }
 
-    pub async fn off_board<R>(
-        &self,
-        secp: &Secp256k1<All>,
-        secp_zkp: &zkp::Secp256k1<zkp::All>,
-        rng: &mut R,
-        address: Address,
-        amount: Amount,
-        // TODO return a proper TxId type
-    ) -> Result<String, Error>
-    where
-        R: Rng + CryptoRng,
-    {
-        // Get off-chain address and send all funds to this address, no change output 🦄
-        let (change_address, _) = self.get_offchain_address()?;
-
-        let (boarding_inputs, vtxo_inputs, total_amount) =
-            self.prepare_round_transactions().await?;
-
-        tracing::info!(
-            address = address.to_string(),
-            amount = amount.to_string(),
-            change_address = ?change_address.encode(),
-            ?boarding_inputs, "Attempting to off-board the ark");
-
-        // Joining a round is likely to fail depending on the timing, so we keep retrying.
-        //
-        // TODO: Consider not retrying on all errors. ATM the retry mechanism is way too quick as
-        // well. We should use backoff and only retry on ephemeral errors.
-
-        let txid = loop {
-            match self
-                .join_next_ark_round(
-                    secp,
-                    secp_zkp,
-                    rng,
-                    boarding_inputs.clone(),
-                    vtxo_inputs.clone(),
-                    RoundOutputType::OffBoard {
-                        to_address: address.clone(),
-                        to_amount: amount,
-                        change_address,
-                        change_amount: total_amount.checked_sub(amount).unwrap(),
-                    },
-                )
-                .await
-            {
-                Ok(txid) => {
-                    break txid;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to join the round: {e:?}. Retrying");
-                }
-            }
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        };
-        tracing::info!(txid, "Boarding success");
-
-        Ok(txid)
-    }
-
     #[allow(clippy::too_many_arguments)]
     async fn join_next_ark_round<R>(
         &self,
@@ -594,8 +598,7 @@ where
         boarding_inputs: Vec<(OutPoint, BoardingAddress)>,
         vtxo_inputs: Vec<(Vtxo, DefaultVtxoScript)>,
         output_type: RoundOutputType,
-    ) -> Result<String, Error>
-    // TODO: type the return type to TXID
+    ) -> Result<Txid, Error>
     where
         R: Rng + CryptoRng,
     {
@@ -724,7 +727,6 @@ where
         let mut stream = response.into_inner();
 
         let mut step = RoundStep::Start;
-        let registered_round_id = register_inputs_for_next_round_id;
 
         let asp_pk: secp256k1::PublicKey = asp_info.pubkey.parse().unwrap();
         let sweep_closure = CsvSigClosure {
@@ -734,6 +736,7 @@ where
 
         let sweep_tap_leaf = sweep_closure.leaf();
 
+        let mut round_id: Option<String> = None;
         let mut unsigned_round_tx: Option<Psbt> = None;
         let mut vtxo_tree: Option<Tree> = None;
         let mut cosigner_pks: Option<Vec<zkp::PublicKey>> = None;
@@ -751,7 +754,10 @@ where
                             if step != RoundStep::Start {
                                 continue;
                             }
+
                             tracing::info!(round_id = e.id, "Round signing started");
+
+                            round_id = Some(e.id.clone());
 
                             let unsigned_vtxo_tree = e
                                 .unsigned_vtxo_tree
@@ -1099,11 +1105,14 @@ where
                                 continue;
                             }
 
-                            tracing::info!(round_id = e.id, txid = e.round_txid, "Round finalized");
-                            return Ok(e.round_txid);
+                            let txid = e.round_txid.parse().unwrap();
+
+                            tracing::info!(round_id = e.id, %txid, "Round finalized");
+
+                            return Ok(txid);
                         }
                         Some(get_event_stream_response::Event::RoundFailed(e)) => {
-                            if e.id == registered_round_id {
+                            if Some(&e.id) == round_id.as_ref() {
                                 tracing::error!(
                                     round_id = e.id,
                                     reason = e.reason,
@@ -1937,8 +1946,9 @@ pub mod tests {
             .unwrap();
 
         let alice_offchain_balance = alice.offchain_balance().await.unwrap();
+
         tracing::debug!(
-            txid,
+            %txid,
             "Post off-boarding: Alice offchain balance: {alice_offchain_balance}"
         );
     }
