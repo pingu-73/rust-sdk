@@ -1535,7 +1535,7 @@ where
                     let lifetime = extract_sequence_from_csv_sig_closure(script).unwrap();
                     let lifetime = match lifetime.to_relative_lock_time().unwrap() {
                         relative::LockTime::Time(time) => {
-                            Duration::from_secs((time.value() * 512) as u64)
+                            Duration::from_secs(time.value() as u64 * 512)
                         }
                         relative::LockTime::Blocks(_) => {
                             unreachable!("Only seconds timelock is supported");
@@ -1611,8 +1611,11 @@ where
             // The transactions were inserted from leaf to root, so we must reverse the `Vec` to
             // broadcast transactions in a valid order.
             for psbt in psbts_to_broadcast.into_iter().rev() {
-                let input = psbt.inputs[VTXO_INPUT_INDEX].clone();
-                let tap_key_sig = match input.tap_key_sig {
+                dbg!(&psbt);
+
+                let mut psbt = psbt.clone();
+
+                let tap_key_sig = match psbt.inputs[VTXO_INPUT_INDEX].tap_key_sig {
                     None => {
                         tracing::error!("Missing taproot key spend signature");
 
@@ -1621,7 +1624,7 @@ where
                     Some(tap_key_sig) => tap_key_sig,
                 };
 
-                let mut psbt = psbt.clone();
+                // psbt.inputs[VTXO_INPUT_INDEX].witness_utxo
 
                 psbt.inputs[VTXO_INPUT_INDEX].final_script_witness =
                     Some(Witness::p2tr_key_spend(&tap_key_sig));
@@ -1998,8 +2001,10 @@ pub mod tests {
             Ok(value.copied())
         }
 
-        async fn find_tx(&self, _txid: &Txid) -> Result<Option<Transaction>, Error> {
-            todo!()
+        async fn find_tx(&self, txid: &Txid) -> Result<Option<Transaction>, Error> {
+            let tx = self.esplora_client.get_tx(txid).unwrap();
+
+            Ok(tx)
         }
 
         // TODO: Make sure we return a proper error here, so that we can retry if we encounter a
@@ -2121,7 +2126,7 @@ pub mod tests {
 
         bob.board(&secp, &secp_zkp, &mut rng).await.unwrap();
 
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
         let bob_offchain_balance = bob.offchain_balance().await.unwrap();
         let bob_vtxos = bob.list_vtxos().await.unwrap();
@@ -2133,7 +2138,11 @@ pub mod tests {
         let onchain_address = alice.get_onchain_address().unwrap();
 
         let alice_offchain_balance = alice.offchain_balance().await.unwrap();
-        tracing::debug!("Pre off-boarding: Alice offchain balance: {alice_offchain_balance}");
+        let alice_vtxos = alice.list_vtxos().await.unwrap();
+        tracing::debug!(
+            ?alice_vtxos,
+            "Pre off-boarding: Alice offchain balance: {alice_offchain_balance}"
+        );
         let txid = alice
             .off_board(
                 &secp,
@@ -2145,11 +2154,30 @@ pub mod tests {
             .await
             .unwrap();
 
-        let alice_offchain_balance = alice.offchain_balance().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
+        let alice_offchain_balance = alice.offchain_balance().await.unwrap();
+        let alice_vtxos = alice.list_vtxos().await.unwrap();
         tracing::debug!(
             %txid,
+            ?alice_vtxos,
             "Post off-boarding: Alice offchain balance: {alice_offchain_balance}"
+        );
+
+        tracing::debug!(
+            ?alice_vtxos,
+            "Pre unilateral off-boarding: Alice offchain balance: {alice_offchain_balance}"
+        );
+
+        alice.unilateral_off_board().await.unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        let alice_offchain_balance = alice.offchain_balance().await.unwrap();
+        let alice_vtxos = alice.list_vtxos().await.unwrap();
+        tracing::debug!(
+            ?alice_vtxos,
+            "Post unilateral off-boarding: Alice offchain balance: {alice_offchain_balance}"
         );
     }
 
