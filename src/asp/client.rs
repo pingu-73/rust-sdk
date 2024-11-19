@@ -4,12 +4,22 @@ use crate::asp::types::ListVtxo;
 use crate::asp::types::Vtxo;
 use crate::error::Error;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
-use crate::generated::ark::v1::{AsyncPaymentInput, Input, ListVtxosRequest, Outpoint, Output};
-use crate::generated::ark::v1::{CreatePaymentRequest, GetInfoRequest};
+use crate::generated::ark::v1::AsyncPaymentInput;
+use crate::generated::ark::v1::CompletePaymentRequest;
+use crate::generated::ark::v1::CreatePaymentRequest;
+use crate::generated::ark::v1::GetInfoRequest;
+use crate::generated::ark::v1::Input;
+use crate::generated::ark::v1::ListVtxosRequest;
+use crate::generated::ark::v1::Outpoint;
+use crate::generated::ark::v1::Output;
 use base64::Engine;
 use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
-use bitcoin::{Amount, OutPoint, Psbt, TapLeafHash};
+use bitcoin::Amount;
+use bitcoin::OutPoint;
+use bitcoin::Psbt;
+use bitcoin::TapLeafHash;
+use bitcoin::Txid;
 use tonic::transport::Channel;
 
 pub struct PaymentInput {
@@ -83,6 +93,8 @@ impl Client {
         inputs: Vec<PaymentInput>,
         outputs: Vec<PaymentOutput>,
     ) -> Result<Psbt, Error> {
+        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+
         let inputs = inputs
             .iter()
             .map(|input| {
@@ -110,7 +122,7 @@ impl Client {
                 amount: output.amount.to_sat(),
             })
             .collect();
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+
         let res = inner
             .create_payment(CreatePaymentRequest { inputs, outputs })
             .await
@@ -127,5 +139,26 @@ impl Client {
             Psbt::deserialize(&psbt).unwrap()
         };
         Ok(signed_redeem_psbt)
+    }
+
+    pub async fn complete_payment_request(&self, signed_psbt: Psbt) -> Result<Txid, Error> {
+        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+
+        let base64 = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        );
+
+        let signed_psbt_base64 = base64.encode(signed_psbt.serialize());
+
+        let _response = inner
+            .complete_payment(CompletePaymentRequest {
+                signed_redeem_tx: signed_psbt_base64,
+            })
+            .await
+            .unwrap();
+        let txid = signed_psbt.unsigned_tx.compute_txid();
+
+        Ok(txid)
     }
 }

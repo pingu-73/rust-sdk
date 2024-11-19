@@ -1,6 +1,8 @@
 use crate::ark_address::ArkAddress;
-use crate::asp::{ListVtxo, PaymentOutput};
-use crate::asp::{PaymentInput, Vtxo};
+use crate::asp::ListVtxo;
+use crate::asp::PaymentInput;
+use crate::asp::PaymentOutput;
+use crate::asp::Vtxo;
 use crate::boarding_address::BoardingAddress;
 use crate::coinselect::coin_select;
 use crate::conversions::from_zkp_xonly;
@@ -8,9 +10,6 @@ use crate::conversions::to_zkp_pk;
 use crate::default_vtxo_script::DefaultVtxoScript;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::generated::ark::v1::get_event_stream_response;
-use crate::generated::ark::v1::AsyncPaymentInput;
-use crate::generated::ark::v1::CompletePaymentRequest;
-use crate::generated::ark::v1::CreatePaymentRequest;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetRoundRequest;
 use crate::generated::ark::v1::Input;
@@ -365,7 +364,8 @@ where
         Ok(())
     }
 
-    // TODO: SendOffChain, to an off-chain address, using off-chain funds (VTXOs, boarding outputs...).
+    // TODO: SendOffChain, to an off-chain address, using off-chain funds (VTXOs, boarding
+    // outputs...).
 
     // TODO: SendOnChain: to an on-chain address, using on-chain funds.
 
@@ -1181,23 +1181,10 @@ where
             }
         }
 
-        let txid = signed_redeem_psbt.unsigned_tx.compute_txid();
-
-        let mut client = self.inner.inner.clone().unwrap();
-
-        let base64 = base64::engine::GeneralPurpose::new(
-            &base64::alphabet::STANDARD,
-            base64::engine::GeneralPurposeConfig::new(),
-        );
-
-        let signed_redeem_psbt = base64.encode(signed_redeem_psbt.serialize());
-
-        client
-            .complete_payment(CompletePaymentRequest {
-                signed_redeem_tx: signed_redeem_psbt,
-            })
-            .await
-            .unwrap();
+        let txid = self
+            .inner
+            .complete_payment_request(signed_redeem_psbt)
+            .await?;
 
         Ok(txid)
     }
