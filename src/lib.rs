@@ -1,6 +1,6 @@
 use crate::ark_address::ArkAddress;
-use crate::asp::ListVtxo;
-use crate::asp::Vtxo;
+use crate::asp::{ListVtxo, PaymentOutput};
+use crate::asp::{PaymentInput, Vtxo};
 use crate::boarding_address::BoardingAddress;
 use crate::coinselect::coin_select;
 use crate::conversions::from_zkp_xonly;
@@ -1100,55 +1100,29 @@ where
             .map(|(vtxo, script)| {
                 let (forfeit_script, control_block) = script.forfeit_spend_info();
                 let mut leaf_hash =
-                    TapLeafHash::from_script(&forfeit_script, control_block.leaf_version)
-                        .to_byte_array();
+                    TapLeafHash::from_script(&forfeit_script, control_block.leaf_version);
 
-                // The ASP reverses this for some reason.
-                leaf_hash.reverse();
-
-                AsyncPaymentInput {
-                    input: Some(Input {
-                        outpoint: vtxo.outpoint.map(|outpoint| Outpoint {
-                            txid: outpoint.txid.to_string(),
-                            vout: outpoint.vout,
-                        }),
-                        descriptor: script.ark_descriptor.clone(),
-                    }),
-                    forfeit_leaf_hash: leaf_hash.to_lower_hex_string(),
+                PaymentInput {
+                    forfeit_leaf_hash: leaf_hash,
+                    outpoint: vtxo.outpoint,
+                    descriptor: script.ark_descriptor.clone(),
                 }
             })
             .collect::<Vec<_>>();
 
-        let mut outputs = vec![Output {
-            address: address.encode().unwrap(),
-            amount: amount.to_sat(),
+        let mut outputs = vec![PaymentOutput {
+            address: address.clone(),
+            amount,
         }];
 
         if let Some((change_address, change_amount)) = change_output {
-            outputs.push(Output {
-                address: change_address.encode().unwrap(),
-                amount: change_amount.to_sat(),
+            outputs.push(PaymentOutput {
+                address: change_address.clone(),
+                amount: change_amount,
             })
         }
 
-        let mut client = self.inner.inner.clone().unwrap();
-        let res = client
-            .create_payment(CreatePaymentRequest { inputs, outputs })
-            .await
-            .unwrap();
-
-        let signed_redeem_psbt = res.into_inner().signed_redeem_tx;
-
-        let base64 = base64::engine::GeneralPurpose::new(
-            &base64::alphabet::STANDARD,
-            base64::engine::GeneralPurposeConfig::new(),
-        );
-
-        let mut signed_redeem_psbt = {
-            let psbt = base64.decode(&signed_redeem_psbt).unwrap();
-
-            Psbt::deserialize(&psbt).unwrap()
-        };
+        let mut signed_redeem_psbt = self.inner.send_payment(inputs, outputs).await?;
 
         let prevouts = signed_redeem_psbt
             .inputs
@@ -1208,6 +1182,13 @@ where
         }
 
         let txid = signed_redeem_psbt.unsigned_tx.compute_txid();
+
+        let mut client = self.inner.inner.clone().unwrap();
+
+        let base64 = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        );
 
         let signed_redeem_psbt = base64.encode(signed_redeem_psbt.serialize());
 

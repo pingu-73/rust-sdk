@@ -4,9 +4,24 @@ use crate::asp::types::ListVtxo;
 use crate::asp::types::Vtxo;
 use crate::error::Error;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
-use crate::generated::ark::v1::GetInfoRequest;
-use crate::generated::ark::v1::ListVtxosRequest;
+use crate::generated::ark::v1::{AsyncPaymentInput, Input, ListVtxosRequest, Outpoint, Output};
+use crate::generated::ark::v1::{CreatePaymentRequest, GetInfoRequest};
+use base64::Engine;
+use bitcoin::hashes::Hash;
+use bitcoin::hex::DisplayHex;
+use bitcoin::{Amount, OutPoint, Psbt, TapLeafHash};
 use tonic::transport::Channel;
+
+pub struct PaymentInput {
+    pub forfeit_leaf_hash: TapLeafHash,
+    pub outpoint: Option<OutPoint>,
+    pub descriptor: String,
+}
+
+pub struct PaymentOutput {
+    pub address: ArkAddress,
+    pub amount: Amount,
+}
 
 pub struct Client {
     url: String,
@@ -61,5 +76,56 @@ impl Client {
             spent: spent?,
             spendable: spendable?,
         })
+    }
+
+    pub async fn send_payment(
+        &self,
+        inputs: Vec<PaymentInput>,
+        outputs: Vec<PaymentOutput>,
+    ) -> Result<Psbt, Error> {
+        let inputs = inputs
+            .iter()
+            .map(|input| {
+                // The ASP reverses this for some reason.
+                let mut leaf_hash = input.forfeit_leaf_hash.to_byte_array();
+                leaf_hash.reverse();
+
+                AsyncPaymentInput {
+                    input: Some(Input {
+                        outpoint: input.outpoint.map(|outpoint| Outpoint {
+                            txid: outpoint.txid.to_string(),
+                            vout: outpoint.vout,
+                        }),
+                        descriptor: input.descriptor.clone(),
+                    }),
+                    forfeit_leaf_hash: leaf_hash.to_lower_hex_string(),
+                }
+            })
+            .collect();
+
+        let outputs = outputs
+            .iter()
+            .map(|output| Output {
+                address: output.address.encode().unwrap(),
+                amount: output.amount.to_sat(),
+            })
+            .collect();
+        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+        let res = inner
+            .create_payment(CreatePaymentRequest { inputs, outputs })
+            .await
+            .unwrap();
+
+        let base64 = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        );
+
+        let signed_redeem_psbt = {
+            let psbt = base64.decode(&res.into_inner().signed_redeem_tx).unwrap();
+
+            Psbt::deserialize(&psbt).unwrap()
+        };
+        Ok(signed_redeem_psbt)
     }
 }
