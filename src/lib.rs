@@ -440,6 +440,7 @@ where
         Ok(spendable)
     }
 
+    // In go client: Balance (minus the on-chain balance, TODO).
     pub async fn offchain_balance(&self) -> Result<Amount, Error> {
         let vec = self.spendable_vtxos().await?;
         let sum = vec
@@ -450,6 +451,9 @@ where
         Ok(sum)
     }
 
+    // TODO: GetTransactionHistory.
+
+    // In go client: Settle.
     pub async fn board<R>(&self, rng: &mut R) -> Result<(), Error>
     where
         R: Rng + CryptoRng,
@@ -495,6 +499,11 @@ where
         Ok(())
     }
 
+    // TODO: SendOffChain, to an off-chain address, using off-chain funds (VTXOs, boarding outputs...).
+
+    // TODO: SendOnChain: to an on-chain address, using on-chain funds.
+
+    // In go client: CollaborativeRedeem.
     pub async fn off_board<R>(
         &self,
         rng: &mut R,
@@ -1159,6 +1168,7 @@ where
         }
     }
 
+    // In go client: SendAsync.
     pub async fn send_oor(&self, address: ArkAddress, amount: Amount) -> Result<Txid, Error> {
         // 1. get spendable VTXOs & script/descriptor for each VTXO
         let spendable_vtxos_and_script = self.spendable_vtxos().await?;
@@ -1327,6 +1337,201 @@ where
         Ok(txid)
     }
 
+    // In go client: UnilateralRedeem.
+    pub async fn unilateral_off_board(&self) -> Result<(), Error> {
+        let base64 = &base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        );
+
+        // FIXME: We must filter out VTXOS that have not expired yet! We can use the `RedeemBranch`
+        // type for that.
+        let vtxos = self.spendable_vtxos().await.unwrap();
+
+        let mut client = self.inner.inner.clone().unwrap();
+
+        let mut congestion_trees = HashMap::new();
+        let mut redeem_branches = HashMap::new();
+        for (vtxo_list, _) in vtxos.into_iter() {
+            for vtxo in vtxo_list.into_iter() {
+                // TODO: Handle exit for pending changes (taken from go implementation).
+                if !vtxo.redeem_tx.is_empty() {
+                    continue;
+                }
+
+                let round_txid = &vtxo.round_txid;
+                let round = client
+                    .get_round(GetRoundRequest {
+                        txid: round_txid.clone(),
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .round
+                    .unwrap();
+
+                let round_psbt = base64.decode(&round.round_tx).unwrap();
+                let round_psbt = Psbt::deserialize(&round_psbt).unwrap();
+
+                if !congestion_trees.contains_key(round_txid) {
+                    congestion_trees
+                        .insert(round_txid.clone(), round.vtxo_tree.expect("we have one"));
+                }
+
+                let congestion_tree = congestion_trees.get(round_txid.as_str()).expect("is there");
+
+                let root = &congestion_tree.levels[0].nodes[0];
+
+                let psbt = base64.decode(&root.tx).unwrap();
+                let psbt = Psbt::deserialize(&psbt).unwrap();
+
+                for (_, (script, _)) in psbt.inputs[VTXO_INPUT_INDEX].tap_scripts.iter() {
+                    let lifetime = extract_sequence_from_csv_sig_closure(script).unwrap();
+                    let lifetime = match lifetime.to_relative_lock_time().unwrap() {
+                        relative::LockTime::Time(time) => {
+                            Duration::from_secs(time.value() as u64 * 512)
+                        }
+                        relative::LockTime::Blocks(_) => {
+                            unreachable!("Only seconds timelock is supported");
+                        }
+                    };
+
+                    let vtxo_txid = vtxo.outpoint.expect("outpoint").txid.to_string();
+                    let leaf_node = congestion_tree
+                        .levels
+                        .last()
+                        .expect("at least one")
+                        .nodes
+                        .iter()
+                        .find(|node| node.txid == vtxo_txid)
+                        .expect("leaf node");
+
+                    // Build the branch from our VTXO to the root of the VTXO tree.
+                    let mut branch = vec![leaf_node];
+                    while branch[0].txid != root.txid {
+                        let parent_node = congestion_tree
+                            .levels
+                            .iter()
+                            .find_map(|level| {
+                                level.nodes.iter().find(|node| node.txid == branch[0].txid)
+                            })
+                            .expect("parent");
+
+                        branch = [vec![parent_node], branch].concat()
+                    }
+
+                    let branch = branch
+                        .into_iter()
+                        .map(|node| {
+                            let psbt = base64.decode(&node.tx).unwrap();
+                            Psbt::deserialize(&psbt).unwrap()
+                        })
+                        .collect::<Vec<_>>();
+
+                    redeem_branches.insert(
+                        vtxo_txid,
+                        (
+                            RedeemBranch {
+                                vtxo: vtxo.clone(),
+                                branch,
+                                lifetime,
+                            },
+                            round_psbt.clone(),
+                        ),
+                    );
+                }
+            }
+        }
+
+        let mut tx_set = HashSet::new();
+        let mut all_txs = Vec::new();
+        for (redeem_branch, round_psbt) in redeem_branches.values() {
+            let mut psbts_to_broadcast = Vec::new();
+
+            // We start from the bottom so that we can stop looking for parent TXs in the redeem
+            // path if we find a transaction on the blockchain.
+            for mut psbt in redeem_branch.branch.clone().into_iter().rev() {
+                let txid = psbt.unsigned_tx.compute_txid();
+                match self.blockchain.find_tx(&txid).await.unwrap() {
+                    Some(_) => {
+                        tracing::debug!(%txid, "Transaction in redeem path already on chain");
+
+                        // We found all the transactions that need to be broadcast to get our VTXO.
+                        break;
+                    }
+                    None => {
+                        let vtxo_previous_output =
+                            psbt.unsigned_tx.input[VTXO_INPUT_INDEX].previous_output;
+
+                        let witnes_utxo = {
+                            redeem_branch
+                                .branch
+                                .iter()
+                                .chain(std::iter::once(round_psbt))
+                                .find_map(|other_psbt| {
+                                    (other_psbt.unsigned_tx.compute_txid()
+                                        == vtxo_previous_output.txid)
+                                        .then_some(
+                                            other_psbt.unsigned_tx.output
+                                                [vtxo_previous_output.vout as usize]
+                                                .clone(),
+                                        )
+                                })
+                        }
+                        .expect("witness utxo in path");
+
+                        psbt.inputs[VTXO_INPUT_INDEX].witness_utxo = Some(witnes_utxo);
+
+                        psbts_to_broadcast.push(psbt);
+                    }
+                }
+            }
+
+            // The transactions were inserted from leaf to root, so we must reverse the `Vec` to
+            // broadcast transactions in a valid order.
+            for psbt in psbts_to_broadcast.into_iter().rev() {
+                let mut psbt = psbt.clone();
+
+                let tap_key_sig = match psbt.inputs[VTXO_INPUT_INDEX].tap_key_sig {
+                    None => {
+                        tracing::error!("Missing taproot key spend signature");
+
+                        return Err(Error::Unknown);
+                    }
+                    Some(tap_key_sig) => tap_key_sig,
+                };
+
+                psbt.inputs[VTXO_INPUT_INDEX].final_script_witness =
+                    Some(Witness::p2tr_key_spend(&tap_key_sig));
+
+                let tx = psbt.clone().extract_tx().unwrap();
+
+                let txid = tx.compute_txid();
+                if !tx_set.contains(&txid) {
+                    tx_set.insert(txid);
+                    all_txs.push(tx);
+                }
+            }
+        }
+
+        let all_txs_len = all_txs.len();
+        for (i, tx) in all_txs.iter().enumerate() {
+            let txid = tx.compute_txid();
+            tracing::info!(%txid, "Broadcasting VTXO transaction");
+
+            while let Err(e) = self.blockchain.broadcast(tx).await {
+                tracing::warn!(%txid, "Error broadcasting VTXO transaction: {e:?}");
+
+                // TODO: Should only retry specific errors, but the API is too rough atm.
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+
+            tracing::info!(%txid, i, total_txs = all_txs_len, "Broadcasted VTXO transaction");
+        }
+
+        Ok(())
+    }
+
     fn create_and_sign_forfeit_txs(
         &self,
         vtxo_inputs: Vec<(Vtxo, DefaultVtxoScript)>,
@@ -1478,176 +1683,6 @@ where
         }
 
         Ok(signed_forfeit_psbts)
-    }
-
-    pub async fn unilateral_off_board(&self) -> Result<(), Error> {
-        let base64 = &base64::engine::GeneralPurpose::new(
-            &base64::alphabet::STANDARD,
-            base64::engine::GeneralPurposeConfig::new(),
-        );
-
-        // FIXME: We must filter out VTXOS that have not expired yet! We can use the `RedeemBranch`
-        // type for that.
-        let vtxos = self.spendable_vtxos().await.unwrap();
-
-        let mut client = self.inner.inner.clone().unwrap();
-
-        let mut congestion_trees = HashMap::new();
-        let mut redeem_branches = HashMap::new();
-        for (vtxo_list, _) in vtxos.into_iter() {
-            for vtxo in vtxo_list.into_iter() {
-                // TODO: Handle exit for pending changes (taken from go implementation).
-                if !vtxo.redeem_tx.is_empty() {
-                    continue;
-                }
-
-                let round_txid = &vtxo.round_txid;
-                if !congestion_trees.contains_key(round_txid) {
-                    let round = client
-                        .get_round(GetRoundRequest {
-                            txid: round_txid.clone(),
-                        })
-                        .await
-                        .unwrap()
-                        .into_inner()
-                        .round
-                        .unwrap();
-
-                    congestion_trees
-                        .insert(round_txid.clone(), round.vtxo_tree.expect("we have one"));
-                }
-
-                let congestion_tree = congestion_trees.get(round_txid.as_str()).expect("is there");
-
-                let root = &congestion_tree.levels[0].nodes[0];
-
-                let psbt = base64.decode(&root.tx).unwrap();
-                let psbt = Psbt::deserialize(&psbt).unwrap();
-
-                for (_, (script, _)) in psbt.inputs[VTXO_INPUT_INDEX].tap_scripts.iter() {
-                    let lifetime = extract_sequence_from_csv_sig_closure(script).unwrap();
-                    let lifetime = match lifetime.to_relative_lock_time().unwrap() {
-                        relative::LockTime::Time(time) => {
-                            Duration::from_secs(time.value() as u64 * 512)
-                        }
-                        relative::LockTime::Blocks(_) => {
-                            unreachable!("Only seconds timelock is supported");
-                        }
-                    };
-
-                    let vtxo_txid = vtxo.outpoint.expect("outpoint").txid.to_string();
-                    let leaf_node = congestion_tree
-                        .levels
-                        .last()
-                        .expect("at least one")
-                        .nodes
-                        .iter()
-                        .find(|node| node.txid == vtxo_txid)
-                        .expect("leaf node");
-
-                    // Build the branch from our VTXO to the root of the VTXO tree.
-                    let mut branch = vec![leaf_node];
-                    while branch[0].txid != root.txid {
-                        let parent_node = congestion_tree
-                            .levels
-                            .iter()
-                            .find_map(|level| {
-                                level.nodes.iter().find(|node| node.txid == branch[0].txid)
-                            })
-                            .expect("parent");
-
-                        branch = [vec![parent_node], branch].concat()
-                    }
-
-                    let branch = branch
-                        .into_iter()
-                        .map(|node| {
-                            let psbt = base64.decode(&node.tx).unwrap();
-                            Psbt::deserialize(&psbt).unwrap()
-                        })
-                        .collect::<Vec<_>>();
-
-                    redeem_branches.insert(
-                        vtxo_txid,
-                        RedeemBranch {
-                            vtxo: vtxo.clone(),
-                            branch,
-                            lifetime,
-                        },
-                    );
-                }
-            }
-        }
-
-        let mut tx_set = HashSet::new();
-        let mut all_txs = Vec::new();
-        for redeem_branch in redeem_branches.values() {
-            let mut psbts_to_broadcast = Vec::new();
-
-            // We start from the bottom so that we can stop looking for parent TXs in the redeem
-            // path if we find a transaction on the blockchain.
-            for psbt in redeem_branch.branch.iter().rev() {
-                let txid = psbt.unsigned_tx.compute_txid();
-                match self.blockchain.find_tx(&txid).await.unwrap() {
-                    Some(_) => {
-                        tracing::debug!(%txid, "Transaction in redeem path already on chain");
-
-                        // We found all the transactions that need to be broadcast to get our VTXO.
-                        break;
-                    }
-                    None => {
-                        psbts_to_broadcast.push(psbt);
-                    }
-                }
-            }
-
-            // The transactions were inserted from leaf to root, so we must reverse the `Vec` to
-            // broadcast transactions in a valid order.
-            for psbt in psbts_to_broadcast.into_iter().rev() {
-                dbg!(&psbt);
-
-                let mut psbt = psbt.clone();
-
-                let tap_key_sig = match psbt.inputs[VTXO_INPUT_INDEX].tap_key_sig {
-                    None => {
-                        tracing::error!("Missing taproot key spend signature");
-
-                        return Err(Error::Unknown);
-                    }
-                    Some(tap_key_sig) => tap_key_sig,
-                };
-
-                // psbt.inputs[VTXO_INPUT_INDEX].witness_utxo
-
-                psbt.inputs[VTXO_INPUT_INDEX].final_script_witness =
-                    Some(Witness::p2tr_key_spend(&tap_key_sig));
-
-                let tx = psbt.clone().extract_tx().unwrap();
-
-                let txid = tx.compute_txid();
-                if !tx_set.contains(&txid) {
-                    tx_set.insert(txid);
-                    all_txs.push(tx);
-                }
-            }
-        }
-
-        let all_txs_len = all_txs.len();
-        for (i, tx) in all_txs.iter().enumerate() {
-            let txid = tx.compute_txid();
-            tracing::info!(%txid, "Broadcasting VTXO transaction");
-
-            while let Err(e) = self.blockchain.broadcast(tx).await {
-                tracing::warn!(%txid, "Error broadcasting VTXO transaction: {e:?}");
-
-                // TODO: Should only retry specific errors, but the API is too rough atm.
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
-
-            tracing::info!(%txid, i, total_txs = all_txs_len, "Broadcasted VTXO transaction");
-        }
-
-        Ok(())
     }
 
     fn compute_forfeit_min_relay_fee(
@@ -1892,6 +1927,7 @@ pub mod tests {
     use regex::Regex;
     use std::collections::HashMap;
     use std::process::Command;
+    use std::str::FromStr;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::Once;
@@ -1962,6 +1998,18 @@ pub mod tests {
             guard.insert(address, (point, amount));
 
             point
+        }
+
+        async fn _mine(&self, n: u32) {
+            for _ in 0..n {
+                self.faucet_fund(
+                    Address::from_str("bcrt1q8frde3yn78tl9ecgq4anlz909jh0clefhucdur")
+                        .unwrap()
+                        .assume_checked(),
+                    Amount::from_sat(10_000),
+                )
+                .await;
+            }
         }
     }
 
@@ -2158,10 +2206,22 @@ pub mod tests {
 
         let alice_offchain_balance = alice.offchain_balance().await.unwrap();
         let alice_vtxos = alice.list_vtxos().await.unwrap();
+
         tracing::debug!(
             ?alice_vtxos,
             "Post unilateral off-boarding: Alice offchain balance: {alice_offchain_balance}"
         );
+
+        // If you set the ASP's `ARK_UNILATERAL_EXIT_DELAY` to the minimum value of 512 and you wait
+        // long enough here, the VTXO will disappear from the list of VTXOs, as it will have
+        // "become" a regular UTXO.
+
+        // nigiri.mine(1).await;
+
+        // tracing::info!("Waiting 512 seconds to make VTXO spendable");
+        // tokio::time::sleep(std::time::Duration::from_secs(512)).await;
+
+        // tracing::info!("VTXO should be spendable now");
     }
 
     pub fn init_tracing() {
