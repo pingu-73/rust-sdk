@@ -1029,6 +1029,27 @@ where
                 }
             }
         }
+
+        #[derive(Debug, PartialEq, Eq)]
+        enum RoundStep {
+            Start,
+            RoundSigningStarted,
+            RoundSigningNoncesGenerated,
+            RoundFinalization,
+            Finalized,
+        }
+
+        impl RoundStep {
+            fn next(&self) -> RoundStep {
+                match self {
+                    RoundStep::Start => RoundStep::RoundSigningStarted,
+                    RoundStep::RoundSigningStarted => RoundStep::RoundSigningNoncesGenerated,
+                    RoundStep::RoundSigningNoncesGenerated => RoundStep::RoundFinalization,
+                    RoundStep::RoundFinalization => RoundStep::Finalized,
+                    RoundStep::Finalized => RoundStep::Finalized, // we can't go further
+                }
+            }
+        }
     }
 
     // In go client: SendAsync.
@@ -1543,26 +1564,5 @@ where
         }
 
         Ok(signed_forfeit_psbts)
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum RoundStep {
-    Start,
-    RoundSigningStarted,
-    RoundSigningNoncesGenerated,
-    RoundFinalization,
-    Finalized,
-}
-
-impl RoundStep {
-    fn next(&self) -> RoundStep {
-        match self {
-            RoundStep::Start => RoundStep::RoundSigningStarted,
-            RoundStep::RoundSigningStarted => RoundStep::RoundSigningNoncesGenerated,
-            RoundStep::RoundSigningNoncesGenerated => RoundStep::RoundFinalization,
-            RoundStep::RoundFinalization => RoundStep::Finalized,
-            RoundStep::Finalized => RoundStep::Finalized, // we can't go further
-        }
     }
 }
