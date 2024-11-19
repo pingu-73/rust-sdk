@@ -740,7 +740,7 @@ where
                                 continue;
                             }
 
-                            let nonce_tree = decode_nonce_tree(e.tree_nonces).unwrap();
+                            let nonce_tree = decode_tree(e.tree_nonces).unwrap();
 
                             tracing::debug!(
                                 round_id = e.id,
@@ -1697,6 +1697,21 @@ impl ToBytes for MusigPartialSignature {
     }
 }
 
+pub trait FromCursor {
+    fn from_cursor(cursor: &mut Cursor<&Vec<u8>>) -> Result<Self, Error>
+    where
+        Self: Sized;
+}
+
+impl FromCursor for MusigPubNonce {
+    fn from_cursor(cursor: &mut Cursor<&Vec<u8>>) -> Result<Self, Error> {
+        let mut buffer = [0u8; 66];
+        cursor.read_exact(&mut buffer).unwrap();
+
+        MusigPubNonce::from_slice(&buffer).map_err(|_| Error::Unknown)
+    }
+}
+
 pub fn encode_tree<T>(tree: Vec<Vec<T>>) -> io::Result<Vec<u8>>
 where
     T: ToBytes,
@@ -1717,19 +1732,22 @@ where
     Ok(buf)
 }
 
-pub fn decode_nonce_tree(serialized: String) -> io::Result<Vec<Vec<MusigPubNonce>>> {
-    let mut matrix: Vec<Vec<MusigPubNonce>> = Vec::new();
+pub fn decode_tree<T>(serialized: String) -> io::Result<Vec<Vec<T>>>
+where
+    T: FromCursor,
+{
+    let mut matrix = Vec::new();
     let mut row = Vec::new();
 
     let bytes = Vec::from_hex(&serialized).unwrap();
 
-    let mut reader = Cursor::new(&bytes);
+    let mut cursor = Cursor::new(&bytes);
 
     // |key0/|key1|key2/|key3|key4|key5|key6/
     loop {
         let mut separator = [0u8; 1];
 
-        match reader.read(&mut separator) {
+        match cursor.read(&mut separator) {
             Ok(0) => break, // EOF
             Ok(_) => {
                 let b = separator[0];
@@ -1742,9 +1760,7 @@ pub fn decode_nonce_tree(serialized: String) -> io::Result<Vec<Vec<MusigPubNonce
                     continue;
                 }
 
-                let mut pk_buffer = [0u8; 66];
-                reader.read_exact(&mut pk_buffer).unwrap();
-                let pk = MusigPubNonce::from_slice(&pk_buffer).unwrap();
+                let pk = T::from_cursor(&mut cursor).unwrap();
 
                 row.push(pk);
             }
@@ -1761,7 +1777,7 @@ pub fn decode_nonce_tree(serialized: String) -> io::Result<Vec<Vec<MusigPubNonce
 
 #[cfg(test)]
 pub mod tests {
-    use crate::decode_nonce_tree;
+    use crate::decode_tree;
     use crate::encode_tree;
     use bitcoin::hex::DisplayHex;
     use bitcoin::hex::FromHex;
@@ -1792,7 +1808,7 @@ pub mod tests {
 
         let serialized = encode_tree(nonce_tree).unwrap().to_lower_hex_string();
 
-        let deserialized = decode_nonce_tree(serialized).unwrap();
+        let deserialized = decode_tree(serialized).unwrap();
 
         let pub_nonce_tree = vec![
             vec![MusigPubNonce::from_slice(&a_bytes).unwrap()],
