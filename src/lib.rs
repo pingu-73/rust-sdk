@@ -195,9 +195,9 @@ pub trait Blockchain {
 }
 
 struct RedeemBranch {
-    vtxo: Vtxo,
+    _vtxo: Vtxo,
     branch: Vec<Psbt>,
-    lifetime: Duration,
+    _lifetime: Duration,
 }
 
 impl<B> Client<B>
@@ -1286,7 +1286,7 @@ where
 
                 for (_, (script, _)) in psbt.inputs[VTXO_INPUT_INDEX].tap_scripts.iter() {
                     let lifetime = extract_sequence_from_csv_sig_closure(script).unwrap();
-                    let lifetime = match lifetime.to_relative_lock_time().unwrap() {
+                    let _lifetime = match lifetime.to_relative_lock_time().unwrap() {
                         relative::LockTime::Time(time) => {
                             Duration::from_secs(time.value() as u64 * 512)
                         }
@@ -1331,9 +1331,9 @@ where
                         vtxo_txid,
                         (
                             RedeemBranch {
-                                vtxo: vtxo.clone(),
+                                _vtxo: vtxo.clone(),
                                 branch,
-                                lifetime,
+                                _lifetime,
                             },
                             round_psbt.clone(),
                         ),
