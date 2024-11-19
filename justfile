@@ -13,6 +13,10 @@ fmt:
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings
 
+## -------------------------
+## Local development setup
+## -------------------------
+
 # Set up `clarkd` so that we can run the client e2e tests against it.
 clarkd-setup:
     #!/usr/bin/env bash
@@ -25,7 +29,7 @@ clarkd-setup:
 
     just clarkd-init
 
-    just clarkd-fund
+    just clarkd-fund 10
 
 docker-clarkd-run:
     docker compose -f $CLARKD_COMPOSE_FILE up -d --build
@@ -60,12 +64,12 @@ clarkd-init:
     just _wait-until-clarkd-wallet-is-ready
 
 # Fund clarkd's ASP wallet
-clarkd-fund:
+clarkd-fund n:
     #!/usr/bin/env bash
 
     set -euxo pipefail
 
-    for i in {1..10}; do
+    for i in {1..{{n}}}; do
         address=$(curl -s {{clarkd_url}}/v1/admin/wallet/address | jq .address -r)
 
         echo "Funding clarkd wallet (Iteration $i)"
