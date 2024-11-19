@@ -138,6 +138,8 @@ pub struct Client<B> {
     pub kp: Keypair,
     pub asp_info: Option<asp::Info>,
     blockchain: Arc<B>,
+    secp: Secp256k1<All>,
+    secp_zkp: zkp::Secp256k1<zkp::All>,
 }
 
 #[derive(Clone, Debug)]
@@ -299,6 +301,9 @@ where
     B: Blockchain,
 {
     pub fn new(name: String, kp: Keypair, blockchain: Arc<B>) -> Self {
+        let secp = Secp256k1::new();
+        let secp_zkp = zkp::Secp256k1::new();
+
         let inner = asp::Client::new("http://localhost:7070".to_string());
 
         Self {
@@ -307,6 +312,8 @@ where
             kp,
             asp_info: None,
             blockchain,
+            secp,
+            secp_zkp,
         }
     }
 
@@ -443,12 +450,7 @@ where
         Ok(sum)
     }
 
-    pub async fn board<R>(
-        &self,
-        secp: &Secp256k1<All>,
-        secp_zkp: &zkp::Secp256k1<zkp::All>,
-        rng: &mut R,
-    ) -> Result<(), Error>
+    pub async fn board<R>(&self, rng: &mut R) -> Result<(), Error>
     where
         R: Rng + CryptoRng,
     {
@@ -467,8 +469,6 @@ where
         let txid = loop {
             match self
                 .join_next_ark_round(
-                    secp,
-                    secp_zkp,
                     rng,
                     boarding_inputs.clone(),
                     vtxo_inputs.clone(),
@@ -497,8 +497,6 @@ where
 
     pub async fn off_board<R>(
         &self,
-        secp: &Secp256k1<All>,
-        secp_zkp: &zkp::Secp256k1<zkp::All>,
         rng: &mut R,
         to_address: Address,
         to_amount: Amount,
@@ -529,8 +527,6 @@ where
         let txid = loop {
             match self
                 .join_next_ark_round(
-                    secp,
-                    secp_zkp,
                     rng,
                     boarding_inputs.clone(),
                     vtxo_inputs.clone(),
@@ -613,8 +609,6 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn join_next_ark_round<R>(
         &self,
-        secp: &Secp256k1<All>,
-        secp_zkp: &zkp::Secp256k1<zkp::All>,
         rng: &mut R,
         boarding_inputs: Vec<(OutPoint, BoardingAddress)>,
         vtxo_inputs: Vec<(Vtxo, DefaultVtxoScript)>,
@@ -626,7 +620,7 @@ where
         let asp_info = self.asp_info.clone().unwrap();
 
         // Generate an ephemeral key.
-        let ephemeral_kp = Keypair::new(secp, rng);
+        let ephemeral_kp = Keypair::new(&self.secp, rng);
 
         let inputs_api = {
             let boarding_inputs = boarding_inputs.clone().into_iter().map(|(o, d)| Input {
@@ -885,7 +879,8 @@ where
 
                             cosigner_pks.sort_by_key(|k| k.serialize());
 
-                            let mut key_agg_cache = MusigKeyAggCache::new(secp_zkp, &cosigner_pks);
+                            let mut key_agg_cache =
+                                MusigKeyAggCache::new(&self.secp_zkp, &cosigner_pks);
 
                             let sweep_tap_tree = {
                                 let (script, version) = sweep_tap_leaf.as_script().unwrap();
@@ -893,7 +888,7 @@ where
                                 TaprootBuilder::new()
                                     .add_leaf_with_ver(0, ScriptBuf::from(script), version)
                                     .unwrap()
-                                    .finalize(secp, from_zkp_xonly(key_agg_cache.agg_pk()))
+                                    .finalize(&self.secp, from_zkp_xonly(key_agg_cache.agg_pk()))
                             }
                             .unwrap();
 
@@ -903,11 +898,11 @@ where
                             .unwrap();
 
                             key_agg_cache
-                                .pubkey_xonly_tweak_add(secp_zkp, tweak)
+                                .pubkey_xonly_tweak_add(&self.secp_zkp, tweak)
                                 .unwrap();
 
                             let ephemeral_kp = zkp::Keypair::from_seckey_slice(
-                                secp_zkp,
+                                &self.secp_zkp,
                                 &ephemeral_kp.secret_bytes(),
                             )
                             .unwrap();
@@ -922,7 +917,7 @@ where
 
                                     // Equivalent to parsing the individual `MusigAggNonce` from a
                                     // slice.
-                                    let agg_nonce = MusigAggNonce::new(secp_zkp, &[nonce]);
+                                    let agg_nonce = MusigAggNonce::new(&self.secp_zkp, &[nonce]);
 
                                     let psbt = base64::engine::GeneralPurpose::new(
                                         &base64::alphabet::STANDARD,
@@ -984,15 +979,19 @@ where
 
                                     let nonce_sk = our_nonce_tree[i][j].take().unwrap().0;
 
-                                    let sig =
-                                        MusigSession::new(secp_zkp, &key_agg_cache, agg_nonce, msg)
-                                            .partial_sign(
-                                                secp_zkp,
-                                                nonce_sk,
-                                                &ephemeral_kp,
-                                                &key_agg_cache,
-                                            )
-                                            .unwrap();
+                                    let sig = MusigSession::new(
+                                        &self.secp_zkp,
+                                        &key_agg_cache,
+                                        agg_nonce,
+                                        msg,
+                                    )
+                                    .partial_sign(
+                                        &self.secp_zkp,
+                                        nonce_sk,
+                                        &ephemeral_kp,
+                                        &key_agg_cache,
+                                    )
+                                    .unwrap();
 
                                     sigs_level.push(sig);
                                 }
@@ -1020,7 +1019,6 @@ where
 
                             let signed_forfeit_psbts = self
                                 .create_and_sign_forfeit_txs(
-                                    secp,
                                     vtxo_inputs.clone(),
                                     e.connectors,
                                     e.min_relay_fee_rate,
@@ -1083,10 +1081,11 @@ where
                                             tap_sighash.to_raw_hash().to_byte_array(),
                                         );
 
-                                        let sig = secp.sign_schnorr_no_aux_rand(&msg, &self.kp);
+                                        let sig =
+                                            self.secp.sign_schnorr_no_aux_rand(&msg, &self.kp);
                                         let pk = self.kp.x_only_public_key().0;
 
-                                        if secp.verify_schnorr(&sig, &msg, &pk).is_err() {
+                                        if self.secp.verify_schnorr(&sig, &msg, &pk).is_err() {
                                             tracing::error!(
                                                 "Failed to verify own round TX signature"
                                             );
@@ -1160,12 +1159,7 @@ where
         }
     }
 
-    pub async fn send_oor(
-        &self,
-        secp: &Secp256k1<All>,
-        address: ArkAddress,
-        amount: Amount,
-    ) -> Result<Txid, Error> {
+    pub async fn send_oor(&self, address: ArkAddress, amount: Amount) -> Result<Txid, Error> {
         // 1. get spendable VTXOs & script/descriptor for each VTXO
         let spendable_vtxos_and_script = self.spendable_vtxos().await?;
 
@@ -1300,10 +1294,10 @@ where
                     let msg =
                         secp256k1::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
 
-                    let sig = secp.sign_schnorr_no_aux_rand(&msg, &self.kp);
+                    let sig = self.secp.sign_schnorr_no_aux_rand(&msg, &self.kp);
                     let pk = self.kp.x_only_public_key().0;
 
-                    if secp.verify_schnorr(&sig, &msg, &pk).is_err() {
+                    if self.secp.verify_schnorr(&sig, &msg, &pk).is_err() {
                         tracing::error!("Failed to verify own redeem signature");
 
                         return Err(Error::Unknown);
@@ -1335,7 +1329,6 @@ where
 
     fn create_and_sign_forfeit_txs(
         &self,
-        secp: &Secp256k1<All>,
         vtxo_inputs: Vec<(Vtxo, DefaultVtxoScript)>,
         connectors: Vec<String>,
         min_relay_fee_rate_sats_per_kvb: i64,
@@ -1463,10 +1456,10 @@ where
                 let msg =
                     secp256k1::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
 
-                let sig = secp.sign_schnorr_no_aux_rand(&msg, &self.kp);
+                let sig = self.secp.sign_schnorr_no_aux_rand(&msg, &self.kp);
                 let pk = self.kp.x_only_public_key().0;
 
-                if secp.verify_schnorr(&sig, &msg, &pk).is_err() {
+                if self.secp.verify_schnorr(&sig, &msg, &pk).is_err() {
                     tracing::error!("Failed to verify own forfeit signature");
 
                     return Err(Error::Unknown);
@@ -2066,7 +2059,6 @@ pub mod tests {
         let nigiri = Arc::new(Nigiri::new());
 
         let secp = Secp256k1::new();
-        let secp_zkp = zkp::Secp256k1::new();
         let mut rng = thread_rng();
 
         let alice_key = SecretKey::new(&mut rng);
@@ -2086,7 +2078,7 @@ pub mod tests {
 
         tracing::debug!("Pre boarding: Alice offchain balance: {offchain_balance}");
 
-        alice.board(&secp, &secp_zkp, &mut rng).await.unwrap();
+        alice.board(&mut rng).await.unwrap();
 
         let offchain_balance = alice.offchain_balance().await.unwrap();
         tracing::debug!("Post boarding: Alice offchain balance: {offchain_balance}");
@@ -2109,10 +2101,7 @@ pub mod tests {
 
         bob.list_vtxos().await.unwrap();
 
-        alice
-            .send_oor(&secp, bob_offchain_address, amount)
-            .await
-            .unwrap();
+        alice.send_oor(bob_offchain_address, amount).await.unwrap();
 
         let bob_offchain_balance = bob.offchain_balance().await.unwrap();
         let bob_vtxos = bob.list_vtxos().await.unwrap();
@@ -2124,7 +2113,7 @@ pub mod tests {
         let alice_offchain_balance = alice.offchain_balance().await.unwrap();
         tracing::debug!("Post payment: Alice offchain balance: {alice_offchain_balance}");
 
-        bob.board(&secp, &secp_zkp, &mut rng).await.unwrap();
+        bob.board(&mut rng).await.unwrap();
 
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
@@ -2144,13 +2133,7 @@ pub mod tests {
             "Pre off-boarding: Alice offchain balance: {alice_offchain_balance}"
         );
         let txid = alice
-            .off_board(
-                &secp,
-                &secp_zkp,
-                &mut rng,
-                onchain_address,
-                Amount::ONE_BTC / 5,
-            )
+            .off_board(&mut rng, onchain_address, Amount::ONE_BTC / 5)
             .await
             .unwrap();
 
