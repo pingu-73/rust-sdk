@@ -1,3 +1,5 @@
+// TODO: Find a better name for this module.
+
 use crate::error::Error;
 use bitcoin::hex::FromHex;
 use std::io;

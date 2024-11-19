@@ -6,6 +6,7 @@ use crate::coinselect::coin_select;
 use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
 use crate::default_vtxo_script::DefaultVtxoScript;
+use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::generated::ark::v1::get_event_stream_response;
 use crate::generated::ark::v1::AsyncPaymentInput;
 use crate::generated::ark::v1::CompletePaymentRequest;
@@ -27,7 +28,6 @@ use crate::script::CsvSigClosure;
 use base64::Engine;
 use bitcoin::absolute::LockTime;
 use bitcoin::consensus::deserialize;
-use bitcoin::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
 use bitcoin::hex::FromHex;
@@ -43,9 +43,7 @@ use bitcoin::taproot;
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::transaction;
 use bitcoin::Address;
-use bitcoin::AddressType;
 use bitcoin::Amount;
-use bitcoin::FeeRate;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::ScriptBuf;
@@ -55,7 +53,6 @@ use bitcoin::Transaction;
 use bitcoin::TxIn;
 use bitcoin::TxOut;
 use bitcoin::Txid;
-use bitcoin::VarInt;
 use bitcoin::Witness;
 use error::Error;
 use futures::FutureExt;
@@ -100,7 +97,8 @@ pub mod script;
 
 mod coinselect;
 mod conversions;
-mod tree; // TODO: Find a better name.
+mod forfeit_fee;
+mod tree;
 
 // TODO: Figure out how to integrate on-chain wallet. Probably use a trait and implement using
 // `bdk`.
@@ -1429,13 +1427,12 @@ where
 
         let mut signed_forfeit_psbts = Vec::new();
         for (vtxo, vtxo_descriptor) in vtxo_inputs.iter() {
-            let min_relay_fee = self
-                .compute_forfeit_min_relay_fee(
-                    fee_rate_sats_per_kvb,
-                    vtxo_descriptor,
-                    forfeit_address.clone(),
-                )
-                .unwrap();
+            let min_relay_fee = compute_forfeit_min_relay_fee(
+                fee_rate_sats_per_kvb,
+                vtxo_descriptor,
+                forfeit_address.clone(),
+            )
+            .unwrap();
 
             let mut connector_inputs = Vec::new();
             for connector_psbt in connector_psbts.iter() {
@@ -1546,111 +1543,6 @@ where
         }
 
         Ok(signed_forfeit_psbts)
-    }
-
-    fn compute_forfeit_min_relay_fee(
-        &self,
-        fee_rate_sats_per_kvb: u64,
-        vtxo_descriptor: &DefaultVtxoScript,
-        forfeit_address: Address,
-    ) -> Result<Amount, Error> {
-        const INPUT_SIZE: u64 = 32 + 4 + 1 + 4;
-        const P2PKH_SCRIPT_SIG_SIZE: u64 = 1 + 73 + 1 + 33;
-        const FORFEIT_LEAF_WITNESS_SIZE: u64 = 64 * 2; // 2 signatures for multisig.
-        const TAPROOT_BASE_CONTROL_BLOCK_WITNESS_SIZE: u64 = 33;
-        const BASE_OUTPUT_SIZE: u64 = 8 + 1;
-        const P2PKH_SIZE: u64 = 25;
-        const P2SH_SIZE: u64 = 23;
-        const P2WKH_SIZE: u64 = 1 + 1 + 20;
-        const P2WSH_SIZE: u64 = 1 + 1 + 32;
-        const P2TR_SIZE: u64 = 34;
-        const P2PKH_OUTPUT_SIZE: u64 = BASE_OUTPUT_SIZE + P2PKH_SIZE;
-        const P2SH_OUTPUT_SIZE: u64 = BASE_OUTPUT_SIZE + P2SH_SIZE;
-        const P2WKH_OUTPUT_SIZE: u64 = BASE_OUTPUT_SIZE + P2WKH_SIZE;
-        const P2WSH_OUTPUT_SIZE: u64 = BASE_OUTPUT_SIZE + P2WSH_SIZE;
-        const P2TR_OUTPUT_SIZE: u64 = BASE_OUTPUT_SIZE + P2TR_SIZE;
-        const BASE_TX_SIZE: u64 = 4 + 4;
-
-        let n_inputs = 2;
-        let n_outputs = 1;
-        let mut input_size = 0;
-        let mut witness_size = 0;
-        let mut output_size = 0;
-
-        // 1 connector input. We use P2PKH for this!
-        input_size += INPUT_SIZE + P2PKH_SCRIPT_SIG_SIZE;
-        witness_size += 1;
-
-        // 1 VTXO input.
-        input_size += INPUT_SIZE;
-
-        let spend_info = &vtxo_descriptor.descriptor.spend_info();
-        let ((biggest_script, leaf_version), _) = spend_info
-            .script_map()
-            .iter()
-            .max_by_key(|((script, leaf_version), _)| {
-                let control_block = spend_info
-                    .control_block(&(script.clone(), *leaf_version))
-                    .expect("control block");
-
-                control_block.size() + script.len()
-            })
-            .expect("at least one");
-
-        let control_block = spend_info
-            .control_block(&(biggest_script.clone(), *leaf_version))
-            .expect("control block");
-
-        // We add 1 byte for the total number of witness elements.
-        //
-        // 1 byte for the length of the element plus the element itself.
-        let control_block_witness_size = 1
-            + TAPROOT_BASE_CONTROL_BLOCK_WITNESS_SIZE
-            + 1
-            + (biggest_script.len() as u64)
-            + 1
-            + (control_block.merkle_branch.concat().len() as u64);
-
-        witness_size += FORFEIT_LEAF_WITNESS_SIZE + control_block_witness_size;
-
-        match forfeit_address.address_type() {
-            Some(AddressType::P2pkh) => {
-                output_size += P2PKH_OUTPUT_SIZE;
-            }
-            Some(AddressType::P2sh) => {
-                output_size += P2SH_OUTPUT_SIZE;
-            }
-            Some(AddressType::P2wpkh) => {
-                output_size += P2WKH_OUTPUT_SIZE;
-            }
-            Some(AddressType::P2wsh) => {
-                output_size += P2WSH_OUTPUT_SIZE;
-            }
-            Some(AddressType::P2tr) => {
-                output_size += P2TR_OUTPUT_SIZE;
-            }
-            _ => unreachable!("Unless they add new witness versions"),
-        }
-
-        let input_count = VarInt(n_inputs).size() as u64;
-        let output_count = VarInt(n_outputs).size() as u64;
-        let tx_size_stripped = BASE_TX_SIZE + input_count + input_size + output_count + output_size;
-
-        let weight_wu = tx_size_stripped * WITNESS_SCALE_FACTOR as u64;
-        let weight_wu = weight_wu + witness_size;
-
-        let weight_vb = weight_wu as f64 / 4.0;
-
-        // 1012 sat/kvb == 1012/4 sat/kwu
-        let fee_rate = FeeRate::from_sat_per_kwu(fee_rate_sats_per_kvb / 4);
-
-        let fee = fee_rate.fee_vb(weight_vb.ceil() as u64).expect("amount");
-
-        // FIXME: The `lnd` dependency in go is rounding down and `rust-bitcoin` is rounding up! We
-        // just need to upgrade.
-        let fee = fee - Amount::ONE_SAT;
-
-        Ok(fee)
     }
 }
 
