@@ -84,7 +84,9 @@ use zkp::MusigSecNonce;
 use zkp::MusigSession;
 use zkp::MusigSessionId;
 
-pub mod generated {
+#[allow(warnings)]
+#[allow(clippy::all)]
+mod generated {
     #[path = ""]
     pub mod ark {
         #[path = "ark.v1.rs"]
