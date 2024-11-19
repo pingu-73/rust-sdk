@@ -2,6 +2,8 @@ use crate::ark_address::ArkAddress;
 use crate::asp::ListVtxo;
 use crate::asp::Vtxo;
 use crate::coinselect::coin_select;
+use crate::conversions::from_zkp_xonly;
+use crate::conversions::to_zkp_pk;
 use crate::generated::ark::v1::get_event_stream_response;
 use crate::generated::ark::v1::AsyncPaymentInput;
 use crate::generated::ark::v1::CompletePaymentRequest;
@@ -18,8 +20,6 @@ use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::generated::ark::v1::Tree;
-use crate::musig::from_zkp_xonly;
-use crate::musig::to_zkp_pk;
 use crate::script::extract_sequence_from_csv_sig_closure;
 use crate::script::CsvSigClosure;
 use base64::Engine;
@@ -98,10 +98,11 @@ pub mod generated {
 // TODO: Reconsider whether these should be public or not.
 pub mod ark_address;
 pub mod asp;
-mod coinselect;
 pub mod error;
-pub mod musig;
 pub mod script;
+
+mod coinselect;
+mod conversions;
 
 // TODO: Figure out how to integrate on-chain wallet. Probably use a trait and implement using
 // `bdk`.
@@ -433,7 +434,7 @@ where
         let mut spendable = vec![];
         for (address, script) in addresses.into_iter() {
             let res = self.inner.list_vtxos(address).await?;
-            // TODO: filter expired VTXOs
+            // TODO: Filter expired VTXOs (using `extract_sequence_from_csv_sig_closure`).
             spendable.push((res.spendable, script));
         }
 
@@ -588,7 +589,7 @@ where
                 .await
                 .unwrap()
             {
-                // TODO: Filter out expired outpoints.
+                // TODO: Filter out expired boarding inputs.
                 boarding_inputs.push((outpoint, boarding_address));
                 total_amount += amount;
             }
@@ -659,7 +660,6 @@ where
 
         let vtxo_inputs = vtxo_inputs.clone().into_iter().collect::<Vec<_>>();
 
-        // TODO: Move this into our API layer.
         let mut client = self.inner.inner.clone().unwrap();
         let response = client
             .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
@@ -794,16 +794,14 @@ where
                             for level in unsigned_vtxo_tree.levels.iter() {
                                 let mut nonces_level = vec![];
                                 for _ in level.nodes.iter() {
-                                    // TODO: Not sure if we want to generate a new session ID per
-                                    // node in the VTXO tree.
-                                    let alice_session_id = MusigSessionId::new(rng);
+                                    let session_id = MusigSessionId::new(rng);
                                     let extra_rand = rng.gen();
 
                                     // TODO: Revisit nonce generation, because this is something
                                     // that we could mess up in a non-obvious way.
                                     let (nonce_sk, nonce_pk) = new_musig_nonce_pair(
                                         &secp_zkp,
-                                        alice_session_id,
+                                        session_id,
                                         None,
                                         None,
                                         to_zkp_pk(ephemeral_kp.public_key()),
@@ -1148,7 +1146,7 @@ where
                                     "Failed registering in round"
                                 );
 
-                                // TODO: return a different error
+                                // TODO: Return a different error (and in many, many other places).
                                 return Err(Error::Unknown);
                             }
                             tracing::debug!("Got message: {e:?}");
@@ -1344,8 +1342,6 @@ where
             base64::engine::GeneralPurposeConfig::new(),
         );
 
-        // FIXME: We must filter out VTXOS that have not expired yet! We can use the `RedeemBranch`
-        // type for that.
         let vtxos = self.spendable_vtxos().await.unwrap();
 
         let mut client = self.inner.inner.clone().unwrap();
@@ -1783,7 +1779,8 @@ where
 
         let fee = fee_rate.fee_vb(weight_vb.ceil() as u64).expect("amount");
 
-        // FIXME: The `lnd` dependency in go is rounding down and `rust-bitcoin` is rounding up!
+        // FIXME: The `lnd` dependency in go is rounding down and `rust-bitcoin` is rounding up! We
+        // just need to upgrade.
         let fee = fee - Amount::ONE_SAT;
 
         Ok(fee)

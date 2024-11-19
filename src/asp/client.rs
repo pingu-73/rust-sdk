@@ -10,6 +10,8 @@ use tonic::transport::Channel;
 
 pub struct Client {
     url: String,
+    // TODO: Make this not public and fix everything in the world. Can still expose, but via a
+    // method.
     pub inner: Option<ArkServiceClient<Channel>>,
 }
 

@@ -2,7 +2,6 @@ use crate::asp::Vtxo;
 use crate::error::Error;
 use bitcoin::Amount;
 
-// TODO: this is unused so far
 #[derive(Clone)]
 pub struct Utxo {
     pub amount: Amount,

@@ -25,7 +25,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
     type Error = crate::Error;
 
     fn try_from(value: generated::ark::v1::GetInfoResponse) -> Result<Self, Self::Error> {
-        // TODO: Use descriptor from ASP when the ASP supports Miniscript.
+        // TODO: Remove Miniscript stuff.
         // let boarding_descriptor = asp_info.boarding_descriptor_template.replace(' ', "");
         let round_lifetime =
             bitcoin::Sequence::from_seconds_floor(value.round_lifetime as u32).expect("valid");
