@@ -1,6 +1,7 @@
 use crate::ark_address::ArkAddress;
 use crate::asp::ListVtxo;
 use crate::asp::Vtxo;
+use crate::boarding_address::BoardingAddress;
 use crate::coinselect::coin_select;
 use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
@@ -33,14 +34,12 @@ use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
-use bitcoin::opcodes;
 use bitcoin::relative;
 use bitcoin::secp256k1;
 use bitcoin::secp256k1::All;
 use bitcoin::sighash::Prevouts;
 use bitcoin::sighash::SighashCache;
 use bitcoin::taproot;
-use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::transaction;
 use bitcoin::Address;
@@ -58,7 +57,6 @@ use bitcoin::TxOut;
 use bitcoin::Txid;
 use bitcoin::VarInt;
 use bitcoin::Witness;
-use bitcoin::XOnlyPublicKey;
 use error::Error;
 use futures::FutureExt;
 use miniscript::Descriptor;
@@ -97,12 +95,13 @@ pub mod generated {
 // TODO: Reconsider whether these should be public or not.
 pub mod ark_address;
 pub mod asp;
+pub mod boarding_address;
+pub mod default_vtxo_script;
 pub mod error;
 pub mod script;
 
 mod coinselect;
 mod conversions;
-mod default_vtxo_script;
 
 // TODO: Figure out how to integrate on-chain wallet. Probably use a trait and implement using
 // `bdk`.
@@ -128,40 +127,6 @@ pub struct Client<B> {
     blockchain: Arc<B>,
     secp: Secp256k1<All>,
     secp_zkp: zkp::Secp256k1<zkp::All>,
-}
-
-#[derive(Clone, Debug)]
-pub struct BoardingAddress {
-    pub asp: secp256k1::PublicKey,
-    pub owner: secp256k1::PublicKey,
-    pub address: Address,
-    pub descriptor: miniscript::descriptor::Tr<XOnlyPublicKey>,
-    pub ark_descriptor: String,
-}
-
-impl BoardingAddress {
-    pub fn forfeit_spend_info(&self) -> (ScriptBuf, taproot::ControlBlock) {
-        let asp = self.asp.to_x_only_pubkey();
-        let owner = self.owner.to_x_only_pubkey();
-
-        // It's kind of rubbish that we need to reconstruct the script manually to get the
-        // `ControlBlock`. It would be nicer to just get the `ControlBlock` for the left leaf and
-        // the right leaf, knowing which one is which.
-        let script = bitcoin::ScriptBuf::builder()
-            .push_x_only_key(&asp)
-            .push_opcode(opcodes::all::OP_CHECKSIGVERIFY)
-            .push_x_only_key(&owner)
-            .push_opcode(opcodes::all::OP_CHECKSIG)
-            .into_script();
-
-        let control_block = self
-            .descriptor
-            .spend_info()
-            .control_block(&(script.clone(), LeafVersion::TapScript))
-            .expect("control block");
-
-        (script, control_block)
-    }
 }
 
 enum RoundOutputType {
@@ -314,7 +279,7 @@ where
         })
     }
 
-    pub fn get_boarding_addresses(&self) -> Result<Vec<BoardingAddress>, Error> {
+    pub fn get_boarding_addresses(&self) -> Result<Vec<boarding_address::BoardingAddress>, Error> {
         let address = self.get_boarding_address()?;
         Ok(vec![address])
     }
@@ -472,7 +437,7 @@ where
         &self,
     ) -> Result<
         (
-            Vec<(OutPoint, BoardingAddress)>,
+            Vec<(OutPoint, boarding_address::BoardingAddress)>,
             Vec<(Vtxo, DefaultVtxoScript)>,
             Amount,
         ),
@@ -481,7 +446,7 @@ where
         // Get all known boarding addresses.
         let boarding_addresses = self.get_boarding_addresses().unwrap();
 
-        let mut boarding_inputs: Vec<(OutPoint, BoardingAddress)> = Vec::new();
+        let mut boarding_inputs: Vec<(OutPoint, boarding_address::BoardingAddress)> = Vec::new();
         let mut total_amount = Amount::ZERO;
 
         // Find outpoints for each boarding address.
@@ -523,7 +488,7 @@ where
     async fn join_next_ark_round<R>(
         &self,
         rng: &mut R,
-        boarding_inputs: Vec<(OutPoint, BoardingAddress)>,
+        boarding_inputs: Vec<(OutPoint, boarding_address::BoardingAddress)>,
         vtxo_inputs: Vec<(Vtxo, DefaultVtxoScript)>,
         output_type: RoundOutputType,
     ) -> Result<Txid, Error>
