@@ -507,15 +507,12 @@ where
             boarding_inputs.chain(vtxo_inputs).collect()
         };
 
-        let register_inputs_for_next_round_id = self
+        let payment_id = self
             .inner
             .register_inputs_for_next_round(ephemeral_kp.public_key(), inputs)
             .await?;
 
-        tracing::debug!(
-            id = register_inputs_for_next_round_id,
-            "Registered for round"
-        );
+        tracing::debug!(payment_id, "Registered for round");
 
         let boarding_inputs: Vec<_> = boarding_inputs
             .clone()
@@ -553,27 +550,22 @@ where
         }
 
         self.inner
-            .register_outputs_for_next_round(register_inputs_for_next_round_id.clone(), outputs)
+            .register_outputs_for_next_round(payment_id.clone(), outputs)
             .await?;
 
         let inner_client = self.inner.clone();
 
         // The protocol expects us to ping the ASP every 5 seconds to let the server know that we
         // are still interested in joining the round.
+        //
+        // We generate a `RemoteHandle` so that the ping task is cancelled when the parent function
+        // ends.
         let (ping_task, _ping_handle) = {
             let client = inner_client.clone();
-            let round_id = register_inputs_for_next_round_id.clone();
             async move {
                 loop {
-                    let res = client.ping(round_id.clone()).await;
-
-                    match res {
-                        Ok(msg) => {
-                            tracing::trace!("Message via ping: {msg:?}");
-                        }
-                        Err(ref e) => {
-                            tracing::warn!("Error via ping: {e:?}");
-                        }
+                    if let Err(e) = client.ping(payment_id.clone()).await {
+                        tracing::warn!("Error via ping: {e:?}");
                     }
 
                     tokio::time::sleep(Duration::from_millis(5000)).await

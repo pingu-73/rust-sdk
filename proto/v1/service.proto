@@ -51,7 +51,7 @@ service ArkService {
   };
   rpc GetEventStream(GetEventStreamRequest) returns (stream GetEventStreamResponse) {
     option (google.api.http) = {
-      get: "/v1/round/events"
+      get: "/v1/events"
     };
   };
   rpc Ping(PingRequest) returns (PingResponse) {
@@ -97,10 +97,25 @@ service ArkService {
       get: "/v1/transactions"
     };
   }
+
+  /* Entity APIs */
+
+  rpc SetNostrRecipient(SetNostrRecipientRequest) returns (SetNostrRecipientResponse) {
+    option (google.api.http) = {
+      post: "/v1/vtxo/nostr"
+      body: "*"
+    };
+  }
+
+  rpc DeleteNostrRecipient(DeleteNostrRecipientRequest) returns (DeleteNostrRecipientResponse) {
+    option (google.api.http) = {
+      post: "/v1/vtxo/nostr/delete"
+      body: "*"
+    };
+  }
 }
 
 message GetInfoRequest {}
-// here  are the constants
 message GetInfoResponse {
   string pubkey = 1;
   int64 round_lifetime = 2;
@@ -126,6 +141,7 @@ message GetBoardingAddressResponse {
 message RegisterInputsForNextRoundRequest {
   repeated Input inputs = 1;
   optional string ephemeral_pubkey = 2;
+  repeated string notes = 3;
 }
 message RegisterInputsForNextRoundResponse {
   // Mocks wabisabi's blinded credentials.
@@ -176,15 +192,7 @@ message GetEventStreamResponse {
 message PingRequest {
   string payment_id = 1;
 }
-message PingResponse {
-  oneof event {
-    RoundFinalizationEvent round_finalization = 1;
-    RoundFinalizedEvent round_finalized = 2;
-    RoundFailed round_failed = 3;
-    RoundSigningEvent round_signing = 4;
-    RoundSigningNoncesGeneratedEvent round_signing_nonces_generated = 5; 
-  }
-}
+message PingResponse {}
 
 /* Async Payment API messages */
 
@@ -346,3 +354,28 @@ message RedeemTransaction {
   repeated Outpoint spent_vtxos = 2;
   repeated Vtxo spendable_vtxos = 3;
 }
+
+// This message is used to prove to the ASP that the user controls the vtxo without revealing the whole VTXO descriptor.
+message OwnershipProof {
+  string control_block = 1;
+  string script = 2;
+  string signature = 3; // VTXO outpoint signed with script's secret key
+}
+
+message SignedVtxoOutpoint {
+  Outpoint outpoint = 1;
+  OwnershipProof proof = 2;
+}
+
+message SetNostrRecipientRequest {
+  string nostr_recipient = 1;
+  repeated SignedVtxoOutpoint vtxos = 2;
+}
+
+message SetNostrRecipientResponse {}
+
+message DeleteNostrRecipientRequest {
+  repeated SignedVtxoOutpoint vtxos = 1;
+}
+
+message DeleteNostrRecipientResponse {}

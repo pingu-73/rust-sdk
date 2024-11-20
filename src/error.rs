@@ -8,4 +8,10 @@ pub enum Error {
     Unknown,
     EventStreamError(Status),
     EvenStreamEnded,
+    AspApi(AspApiError),
+}
+
+#[derive(Debug)]
+pub enum AspApiError {
+    Ping(String),
 }
