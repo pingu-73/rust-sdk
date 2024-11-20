@@ -147,9 +147,7 @@ pub struct Round {
 #[derive(Debug, Clone)]
 pub struct Client {
     url: String,
-    // TODO: Make this not public and fix everything in the world. Can still expose, but via a
-    // method.
-    pub inner: Option<ArkServiceClient<Channel>>,
+    inner: Option<ArkServiceClient<Channel>>,
 }
 
 impl Client {
@@ -456,6 +454,11 @@ impl Client {
         Ok(response.round.map(Round::from))
     }
 
+    pub fn inner(&self) -> Result<ArkServiceClient<Channel>, Error> {
+        let inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+
+        Ok(inner)
+    }
 }
 
 impl From<crate::generated::ark::v1::PingResponse> for PingResponse {
