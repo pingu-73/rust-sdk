@@ -12,6 +12,7 @@ use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::ListVtxosRequest;
 use crate::generated::ark::v1::Outpoint;
 use crate::generated::ark::v1::Output;
+use crate::generated::ark::v1::PingRequest;
 use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
 use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
 use base64::Engine;
@@ -47,6 +48,73 @@ pub struct RoundOutputs {
     pub amount: Amount,
 }
 
+#[derive(Debug, Clone)]
+pub struct PingResponse {
+    pub response: Option<PingResponseType>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Tree {
+    pub levels: Vec<TreeLevel>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TreeLevel {
+    pub nodes: Vec<Node>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub txid: String,
+    pub tx: String,
+    pub parent_txid: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoundFinalizationEvent {
+    pub id: String,
+    pub round_tx: String,
+    pub vtxo_tree: Option<Tree>,
+    pub connectors: Vec<String>,
+    pub min_relay_fee_rate: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoundFinalizedEvent {
+    pub id: String,
+    pub round_txid: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoundFailedEvent {
+    pub id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoundSigningEvent {
+    pub id: String,
+    pub cosigners_pubkeys: Vec<String>,
+    pub unsigned_vtxo_tree: Option<Tree>,
+    pub unsigned_round_tx: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoundSigningNoncesGeneratedEvent {
+    pub id: String,
+    pub tree_nonces: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum PingResponseType {
+    RoundFinalization(RoundFinalizationEvent),
+    RoundFinalized(RoundFinalizedEvent),
+    RoundFailed(RoundFailedEvent),
+    RoundSigning(RoundSigningEvent),
+    RoundSigningNoncesGenerated(RoundSigningNoncesGeneratedEvent),
+}
+
+#[derive(Debug, Clone)]
 pub struct Client {
     url: String,
     // TODO: Make this not public and fix everything in the world. Can still expose, but via a
@@ -230,5 +298,83 @@ impl Client {
         let txid = signed_psbt.unsigned_tx.compute_txid();
 
         Ok(txid)
+    }
+
+    pub async fn ping(&self, payment_id: String) -> Result<PingResponse, Error> {
+        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+
+        let response = inner.ping(PingRequest { payment_id }).await.unwrap();
+        let response = response.into_inner();
+
+        Ok(response.into())
+    }
+}
+
+impl From<crate::generated::ark::v1::PingResponse> for PingResponse {
+    fn from(value: crate::generated::ark::v1::PingResponse) -> Self {
+        let response = value.event.map(|event| match event {
+            crate::generated::ark::v1::ping_response::Event::RoundFinalization(r) => {
+                PingResponseType::RoundFinalization(RoundFinalizationEvent {
+                    id: r.id,
+                    round_tx: r.round_tx,
+                    vtxo_tree: r.vtxo_tree.map(|tree| tree.into()),
+                    connectors: r.connectors,
+                    min_relay_fee_rate: r.min_relay_fee_rate,
+                })
+            }
+            crate::generated::ark::v1::ping_response::Event::RoundFinalized(r) => {
+                PingResponseType::RoundFinalized(RoundFinalizedEvent {
+                    id: r.id,
+                    round_txid: r.round_txid,
+                })
+            }
+            crate::generated::ark::v1::ping_response::Event::RoundFailed(e) => {
+                PingResponseType::RoundFailed(RoundFailedEvent {
+                    id: e.id,
+                    reason: e.reason,
+                })
+            }
+            crate::generated::ark::v1::ping_response::Event::RoundSigning(e) => {
+                PingResponseType::RoundSigning(RoundSigningEvent {
+                    id: e.id,
+                    cosigners_pubkeys: e.cosigners_pubkeys,
+                    unsigned_vtxo_tree: e.unsigned_vtxo_tree.map(|tree| tree.into()),
+                    unsigned_round_tx: e.unsigned_round_tx,
+                })
+            }
+            crate::generated::ark::v1::ping_response::Event::RoundSigningNoncesGenerated(e) => {
+                PingResponseType::RoundSigningNoncesGenerated(RoundSigningNoncesGeneratedEvent {
+                    id: e.id,
+                    tree_nonces: e.tree_nonces,
+                })
+            }
+        });
+        PingResponse { response }
+    }
+}
+
+impl From<crate::generated::ark::v1::Tree> for Tree {
+    fn from(value: crate::generated::ark::v1::Tree) -> Self {
+        Tree {
+            levels: value.levels.into_iter().map(|level| level.into()).collect(),
+        }
+    }
+}
+
+impl From<crate::generated::ark::v1::TreeLevel> for TreeLevel {
+    fn from(value: crate::generated::ark::v1::TreeLevel) -> Self {
+        TreeLevel {
+            nodes: value.nodes.into_iter().map(|node| node.into()).collect(),
+        }
+    }
+}
+
+impl From<crate::generated::ark::v1::Node> for Node {
+    fn from(value: crate::generated::ark::v1::Node) -> Self {
+        Node {
+            txid: value.txid,
+            tx: value.tx,
+            parent_txid: value.parent_txid,
+        }
     }
 }

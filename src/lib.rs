@@ -14,7 +14,6 @@ use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::generated::ark::v1::get_event_stream_response;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetRoundRequest;
-use crate::generated::ark::v1::PingRequest;
 use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
@@ -563,20 +562,16 @@ where
             .register_outputs_for_next_round(register_inputs_for_next_round_id.clone(), outputs)
             .await?;
 
-        let client = self.inner.inner.clone().unwrap();
+        let inner_client = self.inner.clone();
 
         // The protocol expects us to ping the ASP every 5 seconds to let the server know that we
         // are still interested in joining the round.
         let (ping_task, _ping_handle) = {
-            let mut client = client.clone();
+            let client = inner_client.clone();
             let round_id = register_inputs_for_next_round_id.clone();
             async move {
                 loop {
-                    let res = client
-                        .ping(PingRequest {
-                            payment_id: round_id.clone(),
-                        })
-                        .await;
+                    let res = client.ping(round_id.clone()).await;
 
                     match res {
                         Ok(msg) => {
@@ -595,7 +590,7 @@ where
 
         tokio::spawn(ping_task);
 
-        let mut client = client.clone();
+        let mut client = self.inner.inner.clone().unwrap();
 
         let response = client
             .get_event_stream(GetEventStreamRequest {})
@@ -1098,14 +1093,11 @@ where
             })
             .collect::<Vec<_>>();
 
-        let mut outputs = vec![PaymentOutput {
-            address: address.clone(),
-            amount,
-        }];
+        let mut outputs = vec![PaymentOutput { address, amount }];
 
         if let Some((change_address, change_amount)) = change_output {
             outputs.push(PaymentOutput {
-                address: change_address.clone(),
+                address: change_address,
                 amount: change_amount,
             })
         }
