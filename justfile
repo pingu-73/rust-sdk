@@ -13,6 +13,16 @@ fmt:
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings
 
+## -----------------
+## Code generation
+## -----------------
+
+# Generate GRPC code. Modify proto files before calling this.
+gen-grpc:
+    #!/usr/bin/env bash
+
+    RUSTFLAGS="--cfg genproto" cargo build
+
 ## -------------------------
 ## Local development setup
 ## -------------------------
@@ -31,9 +41,7 @@ clarkd-setup:
 
     just clarkd-fund 10
 
-docker-clarkd-run:
-    docker compose -f $CLARKD_COMPOSE_FILE up -d --build
-
+# Start `clarkd` binary.
 clarkd-run:
     #!/usr/bin/env bash
 
@@ -45,7 +53,7 @@ clarkd-run:
 
     echo "Clarkd started. Find the logs in {{clarkd_logs}}"
 
-# Init clarkd
+# Initialize `clarkd` by creating and unlocking a new wallet.
 clarkd-init:
     #!/usr/bin/env bash
 
@@ -63,7 +71,7 @@ clarkd-init:
 
     just _wait-until-clarkd-wallet-is-ready
 
-# Fund clarkd's ASP wallet
+# Fund `clarkd`'s wallet.
 clarkd-fund n:
     #!/usr/bin/env bash
 
@@ -77,16 +85,12 @@ clarkd-fund n:
         nigiri faucet "$address" 10
     done
 
-# Stop clarkd started via Docker.
-docker-clarkd-kill:
-    docker compose -f $CLARKD_COMPOSE_FILE down
-
-# Stop clarkd binary.
+# Stop `clarkd` binary and delete logs.
 clarkd-kill:
     pkill -9 arkd && echo "Stopped clarkd" || echo "Clarkd not running, skipped"
     [ ! -e "{{clarkd_logs}}" ] || mv -f {{clarkd_logs}} {{clarkd_logs}}.old
 
-# Wipe clarkd data directory.
+# Wipe `clarkd` data directory.
 clarkd-wipe:
     rm -rf $CLARKD_DIR/data
 
@@ -99,23 +103,6 @@ _wait-until-clarkd-is-ready:
       status_code=$(curl -o /dev/null -s -w "%{http_code}" {{clarkd_url}}/v1/admin/wallet/seed)
 
       if [ "$status_code" -eq 200 ]; then
-        echo "clarkd is ready!"
-        exit 0
-      fi
-      sleep 1
-    done
-
-    echo "clarkd was not ready in time"
-
-    exit 1
-
-_wait-until-docker-clarkd-is-ready:
-    #!/usr/bin/env bash
-
-    echo "Waiting for clarkd to be ready..."
-
-    for (( i=0; i<30; i+=1 )); do
-      if docker logs clarkd 2>&1 | grep -q "started listening at"; then
         echo "clarkd is ready!"
         exit 0
       fi
@@ -144,8 +131,3 @@ _wait-until-clarkd-wallet-is-ready:
     echo "clarkd wallet was not ready in time"
 
     exit 1
-
-generate_grpc_types:
-    #!/usr/bin/env bash
-
-    RUSTFLAGS="--cfg genproto" cargo build
