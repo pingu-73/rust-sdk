@@ -9,9 +9,6 @@ use std::io::Write;
 use zkp::MusigPartialSignature;
 use zkp::MusigPubNonce;
 
-const COLUMN_SEPARATOR: u8 = b'|';
-const ROW_SEPARATOR: u8 = b'/';
-
 pub trait ToBytes {
     fn to_bytes(&self) -> Vec<u8>;
 }
@@ -49,15 +46,17 @@ where
 {
     let mut buf = Vec::new();
 
+    let n_rows = tree.len() as u32;
+    buf.write_all(&n_rows.to_le_bytes())?;
+
     // [[key0], [key1, key2], [key3, key4, key5, key6]]
     for level in tree {
-        for pk in level {
-            buf.write_all(&[COLUMN_SEPARATOR])?;
+        let n_columns = level.len() as u32;
+        buf.write_all(&n_columns.to_le_bytes())?;
 
+        for pk in level {
             buf.write_all(&pk.to_bytes())?;
         }
-
-        buf.write_all(&[ROW_SEPARATOR])?;
     }
 
     Ok(buf)
@@ -67,39 +66,30 @@ pub fn decode_tree<T>(serialized: String) -> io::Result<Vec<Vec<T>>>
 where
     T: FromCursor,
 {
-    let mut matrix = Vec::new();
-    let mut row = Vec::new();
-
     let bytes = Vec::from_hex(&serialized).unwrap();
-
     let mut cursor = Cursor::new(&bytes);
 
-    // |key0/|key1|key2/|key3|key4|key5|key6/
-    loop {
-        let mut separator = [0u8; 1];
+    let mut n_rows = [0u8; 4];
+    cursor.read_exact(&mut n_rows)?;
 
-        match cursor.read(&mut separator) {
-            Ok(0) => break, // EOF
-            Ok(_) => {
-                let b = separator[0];
+    let n_rows = u32::from_le_bytes(n_rows);
 
-                if b == ROW_SEPARATOR {
-                    if !row.is_empty() {
-                        matrix.push(row);
-                        row = Vec::new();
-                    }
-                    continue;
-                }
+    let mut matrix = Vec::with_capacity(n_rows as usize);
 
-                let pk = T::from_cursor(&mut cursor).unwrap();
+    // n_rows=3 n_columns=1 key0 n_columns=2 key1 key2 n_columns=4 key3 key4 key5 key6
+    for _ in 0..n_rows {
+        let mut n_columns = [0u8; 4];
+        cursor.read_exact(&mut n_columns)?;
 
-                row.push(pk);
-            }
-            Err(e) => return Err(e),
+        let n_columns = u32::from_le_bytes(n_columns);
+
+        let mut row = Vec::with_capacity(n_columns as usize);
+
+        for _ in 0..n_columns {
+            let pk = T::from_cursor(&mut cursor).unwrap();
+            row.push(pk);
         }
-    }
 
-    if !row.is_empty() {
         matrix.push(row);
     }
 

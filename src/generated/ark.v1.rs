@@ -62,6 +62,18 @@ pub struct GetRoundsResponse {
     #[prost(string, repeated, tag = "1")]
     pub rounds: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct CreateNoteRequest {
+    #[prost(uint32, tag = "1")]
+    pub amount: u32,
+    #[prost(uint32, tag = "2")]
+    pub quantity: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CreateNoteResponse {
+    #[prost(string, repeated, tag = "1")]
+    pub notes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
 /// Generated client implementations.
 pub mod admin_service_client {
     #![allow(
@@ -197,11 +209,25 @@ pub mod admin_service_client {
                 .insert(GrpcMethod::new("ark.v1.AdminService", "GetRounds"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn create_note(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CreateNoteRequest>,
+        ) -> std::result::Result<tonic::Response<super::CreateNoteResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.AdminService/CreateNote");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.AdminService", "CreateNote"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct GetInfoRequest {}
-/// here  are the constants
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetInfoResponse {
     #[prost(string, tag = "1")]
@@ -241,6 +267,8 @@ pub struct RegisterInputsForNextRoundRequest {
     pub inputs: ::prost::alloc::vec::Vec<Input>,
     #[prost(string, optional, tag = "2")]
     pub ephemeral_pubkey: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "3")]
+    pub notes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RegisterInputsForNextRoundResponse {
@@ -320,27 +348,8 @@ pub struct PingRequest {
     #[prost(string, tag = "1")]
     pub payment_id: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PingResponse {
-    #[prost(oneof = "ping_response::Event", tags = "1, 2, 3, 4, 5")]
-    pub event: ::core::option::Option<ping_response::Event>,
-}
-/// Nested message and enum types in `PingResponse`.
-pub mod ping_response {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Event {
-        #[prost(message, tag = "1")]
-        RoundFinalization(super::RoundFinalizationEvent),
-        #[prost(message, tag = "2")]
-        RoundFinalized(super::RoundFinalizedEvent),
-        #[prost(message, tag = "3")]
-        RoundFailed(super::RoundFailed),
-        #[prost(message, tag = "4")]
-        RoundSigning(super::RoundSigningEvent),
-        #[prost(message, tag = "5")]
-        RoundSigningNoncesGenerated(super::RoundSigningNoncesGeneratedEvent),
-    }
-}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct PingResponse {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsyncPaymentInput {
     #[prost(message, optional, tag = "1")]
@@ -568,6 +577,41 @@ pub struct RedeemTransaction {
     #[prost(message, repeated, tag = "3")]
     pub spendable_vtxos: ::prost::alloc::vec::Vec<Vtxo>,
 }
+/// This message is used to prove to the ASP that the user controls the vtxo without revealing the
+/// whole VTXO descriptor.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnershipProof {
+    #[prost(string, tag = "1")]
+    pub control_block: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub script: ::prost::alloc::string::String,
+    /// VTXO outpoint signed with script's secret key
+    #[prost(string, tag = "3")]
+    pub signature: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SignedVtxoOutpoint {
+    #[prost(message, optional, tag = "1")]
+    pub outpoint: ::core::option::Option<Outpoint>,
+    #[prost(message, optional, tag = "2")]
+    pub proof: ::core::option::Option<OwnershipProof>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetNostrRecipientRequest {
+    #[prost(string, tag = "1")]
+    pub nostr_recipient: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub vtxos: ::prost::alloc::vec::Vec<SignedVtxoOutpoint>,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct SetNostrRecipientResponse {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteNostrRecipientRequest {
+    #[prost(message, repeated, tag = "1")]
+    pub vtxos: ::prost::alloc::vec::Vec<SignedVtxoOutpoint>,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct DeleteNostrRecipientResponse {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum RoundStage {
@@ -939,6 +983,37 @@ pub mod ark_service_client {
                 "GetTransactionsStream",
             ));
             self.inner.server_streaming(req, path, codec).await
+        }
+        pub async fn set_nostr_recipient(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SetNostrRecipientRequest>,
+        ) -> std::result::Result<tonic::Response<super::SetNostrRecipientResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/SetNostrRecipient");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.ArkService", "SetNostrRecipient"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn delete_nostr_recipient(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteNostrRecipientRequest>,
+        ) -> std::result::Result<tonic::Response<super::DeleteNostrRecipientResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.ArkService/DeleteNostrRecipient");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.ArkService", "DeleteNostrRecipient"));
+            self.inner.unary(req, path, codec).await
         }
     }
 }

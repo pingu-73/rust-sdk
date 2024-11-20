@@ -11,7 +11,7 @@ fn generate_protos() -> std::io::Result<()> {
     tonic_build::configure()
         .build_server(false)
         .build_client(true)
-        // .out_dir("src/generated")
+        .out_dir("src/generated")
         .compile_protos(
             &[
                 "proto/v1/admin.proto",

@@ -2,6 +2,7 @@ use crate::ark_address::ArkAddress;
 use crate::asp::types::Info;
 use crate::asp::types::ListVtxo;
 use crate::asp::types::Vtxo;
+use crate::error::AspApiError;
 use crate::error::Error;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
 use crate::generated::ark::v1::AsyncPaymentInput;
@@ -59,11 +60,6 @@ pub struct RoundOutputs {
 }
 
 #[derive(Debug, Clone)]
-pub struct PingResponse {
-    pub response: Option<PingResponseType>,
-}
-
-#[derive(Debug, Clone)]
 pub struct Tree {
     pub levels: Vec<TreeLevel>,
 }
@@ -113,15 +109,6 @@ pub struct RoundSigningEvent {
 pub struct RoundSigningNoncesGeneratedEvent {
     pub id: String,
     pub tree_nonces: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum PingResponseType {
-    RoundFinalization(RoundFinalizationEvent),
-    RoundFinalized(RoundFinalizedEvent),
-    RoundFailed(RoundFailedEvent),
-    RoundSigning(RoundSigningEvent),
-    RoundSigningNoncesGenerated(RoundSigningNoncesGeneratedEvent),
 }
 
 #[derive(Debug, Clone)]
@@ -220,17 +207,18 @@ impl Client {
             .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
                 inputs,
                 ephemeral_pubkey: Some(ephemeral_key.to_string()),
+                notes: Vec::new(),
             })
             .await
             .unwrap();
-        let response = response.into_inner();
+        let payment_id = response.into_inner().id;
 
-        Ok(response.id)
+        Ok(payment_id)
     }
 
     pub async fn register_outputs_for_next_round(
         &self,
-        round_id: String,
+        payment_id: String,
         outpouts: Vec<RoundOutputs>,
     ) -> Result<(), Error> {
         let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
@@ -245,7 +233,7 @@ impl Client {
 
         inner
             .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
-                id: round_id,
+                id: payment_id,
                 outputs,
             })
             .await
@@ -328,13 +316,15 @@ impl Client {
         Ok(txid)
     }
 
-    pub async fn ping(&self, payment_id: String) -> Result<PingResponse, Error> {
+    pub async fn ping(&self, payment_id: String) -> Result<(), Error> {
         let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
 
-        let response = inner.ping(PingRequest { payment_id }).await.unwrap();
-        let response = response.into_inner();
+        inner
+            .ping(PingRequest { payment_id })
+            .await
+            .map_err(|e| Error::AspApi(AspApiError::Ping(e.message().to_string())))?;
 
-        Ok(response.into())
+        Ok(())
     }
 
     pub async fn submit_tree_nonces(
@@ -458,49 +448,6 @@ impl Client {
         let inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
 
         Ok(inner)
-    }
-}
-
-impl From<crate::generated::ark::v1::PingResponse> for PingResponse {
-    fn from(value: crate::generated::ark::v1::PingResponse) -> Self {
-        let response = value.event.map(|event| match event {
-            crate::generated::ark::v1::ping_response::Event::RoundFinalization(r) => {
-                PingResponseType::RoundFinalization(RoundFinalizationEvent {
-                    id: r.id,
-                    round_tx: r.round_tx,
-                    vtxo_tree: r.vtxo_tree.map(|tree| tree.into()),
-                    connectors: r.connectors,
-                    min_relay_fee_rate: r.min_relay_fee_rate,
-                })
-            }
-            crate::generated::ark::v1::ping_response::Event::RoundFinalized(r) => {
-                PingResponseType::RoundFinalized(RoundFinalizedEvent {
-                    id: r.id,
-                    round_txid: r.round_txid,
-                })
-            }
-            crate::generated::ark::v1::ping_response::Event::RoundFailed(e) => {
-                PingResponseType::RoundFailed(RoundFailedEvent {
-                    id: e.id,
-                    reason: e.reason,
-                })
-            }
-            crate::generated::ark::v1::ping_response::Event::RoundSigning(e) => {
-                PingResponseType::RoundSigning(RoundSigningEvent {
-                    id: e.id,
-                    cosigners_pubkeys: e.cosigners_pubkeys,
-                    unsigned_vtxo_tree: e.unsigned_vtxo_tree.map(|tree| tree.into()),
-                    unsigned_round_tx: e.unsigned_round_tx,
-                })
-            }
-            crate::generated::ark::v1::ping_response::Event::RoundSigningNoncesGenerated(e) => {
-                PingResponseType::RoundSigningNoncesGenerated(RoundSigningNoncesGeneratedEvent {
-                    id: e.id,
-                    tree_nonces: e.tree_nonces,
-                })
-            }
-        });
-        PingResponse { response }
     }
 }
 

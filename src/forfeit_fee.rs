@@ -1,5 +1,3 @@
-// TODO: Remove after upgrade to 0.4.0.
-
 use crate::default_vtxo_script::DefaultVtxoScript;
 use crate::error::Error;
 use bitcoin::constants::WITNESS_SCALE_FACTOR;
@@ -105,10 +103,6 @@ pub fn compute_forfeit_min_relay_fee(
     let fee_rate = FeeRate::from_sat_per_kwu(fee_rate_sats_per_kvb / 4);
 
     let fee = fee_rate.fee_vb(weight_vb.ceil() as u64).expect("amount");
-
-    // FIXME: The `lnd` dependency in go is rounding down and `rust-bitcoin` is rounding up! We
-    // just need to upgrade.
-    let fee = fee - Amount::ONE_SAT;
 
     Ok(fee)
 }
