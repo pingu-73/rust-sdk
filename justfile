@@ -144,3 +144,8 @@ _wait-until-clarkd-wallet-is-ready:
     echo "clarkd wallet was not ready in time"
 
     exit 1
+
+generate_grpc_types:
+    #!/usr/bin/env bash
+
+    RUSTFLAGS="--cfg genproto" cargo build
