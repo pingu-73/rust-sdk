@@ -13,6 +13,7 @@ use crate::generated::ark::v1::ListVtxosRequest;
 use crate::generated::ark::v1::Outpoint;
 use crate::generated::ark::v1::Output;
 use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
+use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
 use base64::Engine;
 use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
@@ -38,6 +39,12 @@ pub struct PaymentOutput {
 pub struct RoundInputs {
     pub outpoint: Option<OutPoint>,
     pub descriptor: String,
+}
+
+pub struct RoundOutputs {
+    // TODO: would be cool to have a type here which accepts ArkAddress and bitcoin::Address
+    pub address: String,
+    pub amount: Amount,
 }
 
 pub struct Client {
@@ -123,6 +130,32 @@ impl Client {
         let response = response.into_inner();
 
         Ok(response.id)
+    }
+
+    pub async fn register_outputs_for_next_round(
+        &self,
+        round_id: String,
+        outpouts: Vec<RoundOutputs>,
+    ) -> Result<(), Error> {
+        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+
+        let outputs = outpouts
+            .iter()
+            .map(|out| Output {
+                address: out.address.clone(),
+                amount: out.amount.to_sat(),
+            })
+            .collect();
+
+        inner
+            .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
+                id: round_id,
+                outputs,
+            })
+            .await
+            .unwrap();
+
+        Ok(())
     }
 
     pub async fn send_payment(

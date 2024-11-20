@@ -3,6 +3,7 @@ use crate::asp::ListVtxo;
 use crate::asp::PaymentInput;
 use crate::asp::PaymentOutput;
 use crate::asp::RoundInputs;
+use crate::asp::RoundOutputs;
 use crate::asp::Vtxo;
 use crate::boarding_address::BoardingAddress;
 use crate::coinselect::coin_select;
@@ -13,9 +14,7 @@ use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::generated::ark::v1::get_event_stream_response;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetRoundRequest;
-use crate::generated::ark::v1::Output;
 use crate::generated::ark::v1::PingRequest;
-use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
 use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
@@ -539,9 +538,9 @@ where
             RoundOutputType::Board {
                 to_address,
                 to_amount,
-            } => outputs.push(Output {
+            } => outputs.push(RoundOutputs {
                 address: to_address.encode().unwrap(),
-                amount: to_amount.to_sat(),
+                amount: to_amount,
             }),
             RoundOutputType::OffBoard {
                 to_address,
@@ -549,25 +548,22 @@ where
                 change_address,
                 change_amount,
             } => {
-                outputs.push(Output {
+                outputs.push(RoundOutputs {
                     address: to_address.to_string(),
-                    amount: to_amount.to_sat(),
+                    amount: to_amount,
                 });
-                outputs.push(Output {
+                outputs.push(RoundOutputs {
                     address: change_address.encode().unwrap(),
-                    amount: change_amount.to_sat(),
+                    amount: change_amount,
                 });
             }
         }
 
-        let mut client = self.inner.inner.clone().unwrap();
-        client
-            .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
-                id: register_inputs_for_next_round_id.clone(),
-                outputs,
-            })
-            .await
-            .unwrap();
+        self.inner
+            .register_outputs_for_next_round(register_inputs_for_next_round_id.clone(), outputs)
+            .await?;
+
+        let client = self.inner.inner.clone().unwrap();
 
         // The protocol expects us to ping the ASP every 5 seconds to let the server know that we
         // are still interested in joining the round.
