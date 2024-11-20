@@ -4,8 +4,6 @@ use crate::asp::types::ListVtxo;
 use crate::asp::types::Vtxo;
 use crate::error::Error;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
-use crate::generated::ark::v1::AsyncPaymentInput;
-use crate::generated::ark::v1::CompletePaymentRequest;
 use crate::generated::ark::v1::CreatePaymentRequest;
 use crate::generated::ark::v1::GetInfoRequest;
 use crate::generated::ark::v1::Input;
@@ -15,6 +13,9 @@ use crate::generated::ark::v1::Output;
 use crate::generated::ark::v1::PingRequest;
 use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
 use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
+use crate::generated::ark::v1::{AsyncPaymentInput, SubmitTreeNoncesRequest};
+use crate::generated::ark::v1::{CompletePaymentRequest, SubmitTreeSignaturesRequest};
+use crate::tree;
 use base64::Engine;
 use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
@@ -307,6 +308,28 @@ impl Client {
         let response = response.into_inner();
 
         Ok(response.into())
+    }
+
+    pub async fn submit_tree_signatures(
+        &self,
+        round_id: String,
+        ephemeral_pubkey: zkp::PublicKey,
+        pub_nonce_tree: Vec<Vec<zkp::MusigPartialSignature>>,
+    ) -> Result<(), Error> {
+        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+
+        let nonce_tree = tree::encode_tree(pub_nonce_tree).unwrap();
+
+        inner
+            .submit_tree_signatures(SubmitTreeSignaturesRequest {
+                round_id,
+                pubkey: ephemeral_pubkey.to_string(),
+                tree_signatures: nonce_tree.to_lower_hex_string(),
+            })
+            .await
+            .unwrap();
+
+        Ok(())
     }
 }
 

@@ -16,7 +16,6 @@ use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetRoundRequest;
 use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
-use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::generated::ark::v1::Tree;
 use crate::script::extract_sequence_from_csv_sig_closure;
 use crate::script::CsvSigClosure;
@@ -590,9 +589,10 @@ where
 
         tokio::spawn(ping_task);
 
-        let mut client = self.inner.inner.clone().unwrap();
+        let client = self.inner.clone();
+        let mut dont_use_client = self.inner.inner.clone().unwrap();
 
-        let response = client
+        let response = dont_use_client
             .get_event_stream(GetEventStreamRequest {})
             .await
             .unwrap();
@@ -677,7 +677,7 @@ where
 
                             let nonce_tree = tree::encode_tree(pub_nonce_tree).unwrap();
 
-                            client
+                            dont_use_client
                                 .submit_tree_nonces(SubmitTreeNoncesRequest {
                                     round_id: e.id,
                                     pubkey: ephemeral_kp.public_key().to_string(),
@@ -853,16 +853,9 @@ where
                                 sig_tree.push(sigs_level);
                             }
 
-                            let sig_tree = tree::encode_tree(sig_tree).unwrap();
-
                             client
-                                .submit_tree_signatures(SubmitTreeSignaturesRequest {
-                                    round_id: e.id,
-                                    pubkey: ephemeral_kp.public_key().to_string(),
-                                    tree_signatures: sig_tree.to_lower_hex_string(),
-                                })
-                                .await
-                                .unwrap();
+                                .submit_tree_signatures(e.id, ephemeral_kp.public_key(), sig_tree)
+                                .await?;
 
                             step = step.next();
                         }
@@ -965,7 +958,7 @@ where
                                 .collect();
                             let signed_round_psbt = base64.encode(round_psbt.serialize());
 
-                            client
+                            dont_use_client
                                 .submit_signed_forfeit_txs(SubmitSignedForfeitTxsRequest {
                                     signed_forfeit_txs: signed_forfeit_psbts,
                                     signed_round_tx: Some(signed_round_psbt),
