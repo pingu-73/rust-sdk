@@ -4,6 +4,8 @@ use crate::asp::PaymentInput;
 use crate::asp::PaymentOutput;
 use crate::asp::RoundInputs;
 use crate::asp::RoundOutputs;
+use crate::asp::RoundStreamEvent;
+use crate::asp::Tree;
 use crate::asp::Vtxo;
 use crate::boarding_address::BoardingAddress;
 use crate::coinselect::coin_select;
@@ -11,20 +13,12 @@ use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
 use crate::default_vtxo_script::DefaultVtxoScript;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
-use crate::generated::ark::v1::get_event_stream_response;
-use crate::generated::ark::v1::GetEventStreamRequest;
-use crate::generated::ark::v1::GetRoundRequest;
-use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
-use crate::generated::ark::v1::SubmitTreeNoncesRequest;
-use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
-use crate::generated::ark::v1::Tree;
 use crate::script::extract_sequence_from_csv_sig_closure;
 use crate::script::CsvSigClosure;
 use base64::Engine;
 use bitcoin::absolute::LockTime;
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::Hash;
-use bitcoin::hex::DisplayHex;
 use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
@@ -590,13 +584,9 @@ where
 
         tokio::spawn(ping_task);
 
-        let mut client = self.inner.inner.clone().unwrap();
+        let client = self.inner.clone();
 
-        let response = client
-            .get_event_stream(GetEventStreamRequest {})
-            .await
-            .unwrap();
-        let mut stream = response.into_inner();
+        let mut stream = client.get_event_stream().await?;
 
         let mut step = RoundStep::Start;
 
@@ -617,12 +607,9 @@ where
         let mut our_nonce_tree: Option<Vec<Vec<Option<(MusigSecNonce, MusigPubNonce)>>>> = None;
         loop {
             match stream.next().await {
-                Some(Ok(res)) => {
-                    match res.event {
-                        None => {
-                            tracing::debug!("Got empty message");
-                        }
-                        Some(get_event_stream_response::Event::RoundSigning(e)) => {
+                Some(Ok(event)) => {
+                    match event {
+                        RoundStreamEvent::RoundSigning(e) => {
                             if step != RoundStep::Start {
                                 continue;
                             }
@@ -675,16 +662,9 @@ where
 
                             our_nonce_tree = Some(nonce_tree);
 
-                            let nonce_tree = tree::encode_tree(pub_nonce_tree).unwrap();
-
                             client
-                                .submit_tree_nonces(SubmitTreeNoncesRequest {
-                                    round_id: e.id,
-                                    pubkey: ephemeral_kp.public_key().to_string(),
-                                    tree_nonces: nonce_tree.to_lower_hex_string(),
-                                })
-                                .await
-                                .unwrap();
+                                .submit_tree_nonces(e.id, ephemeral_kp.public_key(), pub_nonce_tree)
+                                .await?;
 
                             vtxo_tree = Some(unsigned_vtxo_tree);
 
@@ -713,7 +693,7 @@ where
                             step = step.next();
                             continue;
                         }
-                        Some(get_event_stream_response::Event::RoundSigningNoncesGenerated(e)) => {
+                        RoundStreamEvent::RoundSigningNoncesGenerated(e) => {
                             if step != RoundStep::RoundSigningStarted {
                                 continue;
                             }
@@ -853,20 +833,13 @@ where
                                 sig_tree.push(sigs_level);
                             }
 
-                            let sig_tree = tree::encode_tree(sig_tree).unwrap();
-
                             client
-                                .submit_tree_signatures(SubmitTreeSignaturesRequest {
-                                    round_id: e.id,
-                                    pubkey: ephemeral_kp.public_key().to_string(),
-                                    tree_signatures: sig_tree.to_lower_hex_string(),
-                                })
-                                .await
-                                .unwrap();
+                                .submit_tree_signatures(e.id, ephemeral_kp.public_key(), sig_tree)
+                                .await?;
 
                             step = step.next();
                         }
-                        Some(get_event_stream_response::Event::RoundFinalization(e)) => {
+                        RoundStreamEvent::RoundFinalization(e) => {
                             if step != RoundStep::RoundSigningNoncesGenerated {
                                 continue;
                             }
@@ -959,23 +932,13 @@ where
                                 }
                             }
 
-                            let signed_forfeit_psbts = signed_forfeit_psbts
-                                .into_iter()
-                                .map(|psbt| base64.encode(psbt.serialize()))
-                                .collect();
-                            let signed_round_psbt = base64.encode(round_psbt.serialize());
-
                             client
-                                .submit_signed_forfeit_txs(SubmitSignedForfeitTxsRequest {
-                                    signed_forfeit_txs: signed_forfeit_psbts,
-                                    signed_round_tx: Some(signed_round_psbt),
-                                })
-                                .await
-                                .unwrap();
+                                .submit_signed_forfeit_txs(signed_forfeit_psbts, round_psbt)
+                                .await?;
 
                             step = step.next();
                         }
-                        Some(get_event_stream_response::Event::RoundFinalized(e)) => {
+                        RoundStreamEvent::RoundFinalized(e) => {
                             if step != RoundStep::RoundFinalization {
                                 continue;
                             }
@@ -986,7 +949,7 @@ where
 
                             return Ok(txid);
                         }
-                        Some(get_event_stream_response::Event::RoundFailed(e)) => {
+                        RoundStreamEvent::RoundFailed(e) => {
                             if Some(&e.id) == round_id.as_ref() {
                                 tracing::error!(
                                     round_id = e.id,
@@ -1178,8 +1141,6 @@ where
 
         let vtxos = self.spendable_vtxos().await.unwrap();
 
-        let mut client = self.inner.inner.clone().unwrap();
-
         let mut congestion_trees = HashMap::new();
         let mut redeem_branches = HashMap::new();
         for (vtxo_list, _) in vtxos.into_iter() {
@@ -1190,15 +1151,7 @@ where
                 }
 
                 let round_txid = &vtxo.round_txid;
-                let round = client
-                    .get_round(GetRoundRequest {
-                        txid: round_txid.clone(),
-                    })
-                    .await
-                    .unwrap()
-                    .into_inner()
-                    .round
-                    .unwrap();
+                let round = self.inner.get_round(round_txid.clone()).await?.unwrap();
 
                 let round_psbt = base64.decode(&round.round_tx).unwrap();
                 let round_psbt = Psbt::deserialize(&round_psbt).unwrap();
