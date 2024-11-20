@@ -4,7 +4,6 @@ use crate::asp::types::ListVtxo;
 use crate::asp::types::Vtxo;
 use crate::error::Error;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
-use crate::generated::ark::v1::AsyncPaymentInput;
 use crate::generated::ark::v1::GetInfoRequest;
 use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::ListVtxosRequest;
@@ -13,6 +12,7 @@ use crate::generated::ark::v1::Output;
 use crate::generated::ark::v1::PingRequest;
 use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
 use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
+use crate::generated::ark::v1::{AsyncPaymentInput, SubmitTreeNoncesRequest};
 use crate::generated::ark::v1::{CompletePaymentRequest, SubmitTreeSignaturesRequest};
 use crate::generated::ark::v1::{CreatePaymentRequest, SubmitSignedForfeitTxsRequest};
 use crate::tree;
@@ -310,21 +310,43 @@ impl Client {
         Ok(response.into())
     }
 
-    pub async fn submit_tree_signatures(
+    pub async fn submit_tree_nonces(
         &self,
         round_id: String,
-        ephemeral_pubkey: zkp::PublicKey,
-        pub_nonce_tree: Vec<Vec<zkp::MusigPartialSignature>>,
+        ephemeral_pubkey: PublicKey,
+        pub_nonce_tree: Vec<Vec<zkp::MusigPubNonce>>,
     ) -> Result<(), Error> {
         let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
 
         let nonce_tree = tree::encode_tree(pub_nonce_tree).unwrap();
 
         inner
+            .submit_tree_nonces(SubmitTreeNoncesRequest {
+                round_id,
+                pubkey: ephemeral_pubkey.to_string(),
+                tree_nonces: nonce_tree.to_lower_hex_string(),
+            })
+            .await
+            .unwrap();
+
+        Ok(())
+    }
+
+    pub async fn submit_tree_signatures(
+        &self,
+        round_id: String,
+        ephemeral_pubkey: zkp::PublicKey,
+        partial_sig_tree: Vec<Vec<zkp::MusigPartialSignature>>,
+    ) -> Result<(), Error> {
+        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+
+        let tree_signatures = tree::encode_tree(partial_sig_tree).unwrap();
+
+        inner
             .submit_tree_signatures(SubmitTreeSignaturesRequest {
                 round_id,
                 pubkey: ephemeral_pubkey.to_string(),
-                tree_signatures: nonce_tree.to_lower_hex_string(),
+                tree_signatures: tree_signatures.to_lower_hex_string(),
             })
             .await
             .unwrap();

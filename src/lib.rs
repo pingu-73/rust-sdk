@@ -14,7 +14,6 @@ use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::generated::ark::v1::get_event_stream_response;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetRoundRequest;
-use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::Tree;
 use crate::script::extract_sequence_from_csv_sig_closure;
 use crate::script::CsvSigClosure;
@@ -22,7 +21,6 @@ use base64::Engine;
 use bitcoin::absolute::LockTime;
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::Hash;
-use bitcoin::hex::DisplayHex;
 use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
@@ -674,16 +672,9 @@ where
 
                             our_nonce_tree = Some(nonce_tree);
 
-                            let nonce_tree = tree::encode_tree(pub_nonce_tree).unwrap();
-
-                            dont_use_client
-                                .submit_tree_nonces(SubmitTreeNoncesRequest {
-                                    round_id: e.id,
-                                    pubkey: ephemeral_kp.public_key().to_string(),
-                                    tree_nonces: nonce_tree.to_lower_hex_string(),
-                                })
-                                .await
-                                .unwrap();
+                            client
+                                .submit_tree_nonces(e.id, ephemeral_kp.public_key(), pub_nonce_tree)
+                                .await?;
 
                             vtxo_tree = Some(unsigned_vtxo_tree);
 
