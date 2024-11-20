@@ -6,15 +6,15 @@ use crate::asp::RoundInputs;
 use crate::asp::RoundOutputs;
 use crate::asp::RoundStreamEvent;
 use crate::asp::Tree;
-use crate::asp::Vtxo;
-use crate::boarding_address::BoardingAddress;
+use crate::asp::VtxoOutPoint;
+use crate::boarding_output::BoardingOutput;
 use crate::coinselect::coin_select;
 use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
-use crate::default_vtxo_script::DefaultVtxoScript;
+use crate::default_vtxo::DefaultVtxo;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
-use crate::script::extract_sequence_from_csv_sig_closure;
-use crate::script::CsvSigClosure;
+use crate::internal_node::VtxoTreeInternalNodeScript;
+use crate::script::extract_sequence_from_csv_sig_script;
 use base64::Engine;
 use bitcoin::absolute::LockTime;
 use bitcoin::consensus::deserialize;
@@ -45,9 +45,6 @@ use bitcoin::Txid;
 use bitcoin::Witness;
 use error::Error;
 use futures::FutureExt;
-use miniscript::Descriptor;
-use miniscript::ToPublicKey;
-use miniscript::TranslatePk;
 use rand::CryptoRng;
 use rand::Rng;
 use std::collections::BTreeMap;
@@ -79,27 +76,19 @@ mod generated {
 // TODO: Reconsider whether these should be public or not.
 pub mod ark_address;
 pub mod asp;
-pub mod boarding_address;
-pub mod default_vtxo_script;
+pub mod boarding_output;
+pub mod default_vtxo;
 pub mod error;
-pub mod script;
 
 mod coinselect;
 mod conversions;
 mod forfeit_fee;
+mod internal_node;
+mod script;
 mod tree;
 
 // TODO: Figure out how to integrate on-chain wallet. Probably use a trait and implement using
 // `bdk`.
-
-/// The Miniscript descriptor used for the boarding script.
-///
-/// We expect the ASP to provide this, but at the moment the ASP does not quite speak Miniscript.
-///
-/// We use `USER_0` and `USER_1` for the same user key, because `rust-miniscript` does not allow
-/// repeating identifiers.
-const BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT: &str =
-    "tr(UNSPENDABLE_KEY,{and_v(v:pk(ASP),pk(USER_1)),and_v(v:older(TIMEOUT),pk(USER_0))})";
 
 const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
 
@@ -131,7 +120,7 @@ enum RoundOutputType {
 pub trait Blockchain {
     fn find_outpoint(
         &self,
-        address: Address,
+        address: &Address,
     ) -> impl std::future::Future<Output = Result<Option<(OutPoint, Amount)>, Error>> + Send;
 
     fn find_tx(
@@ -146,7 +135,7 @@ pub trait Blockchain {
 }
 
 struct RedeemBranch {
-    _vtxo: Vtxo,
+    _vtxo: VtxoOutPoint,
     branch: Vec<Psbt>,
     _lifetime: Duration,
 }
@@ -182,90 +171,65 @@ where
     }
 
     // At the moment we are always generating the same address.
-    pub fn get_offchain_address(&self) -> Result<(ArkAddress, DefaultVtxoScript), Error> {
+    pub fn get_offchain_address(&self) -> Result<(ArkAddress, DefaultVtxo), Error> {
         let asp_info = self.asp_info.clone().unwrap();
 
         let asp: PublicKey = asp_info.pubkey.parse().unwrap();
-        let asp = asp.to_x_only_pubkey();
-        let owner = self.kp.public_key().to_x_only_pubkey();
+        let (asp, _) = asp.inner.x_only_public_key();
+        let (owner, _) = self.kp.public_key().x_only_public_key();
 
-        let exit_delay = asp_info.unilateral_exit_delay as u64;
-
-        let vtxo_script = DefaultVtxoScript::new(asp, owner, exit_delay).unwrap();
-
-        let spend_info = &vtxo_script.descriptor.spend_info();
-
-        let vtxo_tap_key = spend_info.output_key();
+        let exit_delay = asp_info.unilateral_exit_delay as u32;
 
         let network = asp_info.network;
 
+        let default_vtxo = DefaultVtxo::new(&self.secp, asp, owner, exit_delay, network).unwrap();
+
+        let vtxo_tap_key = &default_vtxo.spend_info().output_key();
         let ark_address = ArkAddress::new(network, asp, vtxo_tap_key.to_inner());
 
-        Ok((ark_address, vtxo_script))
+        Ok((ark_address, default_vtxo))
     }
 
-    pub fn get_offchain_addresses(&self) -> Result<Vec<(ArkAddress, DefaultVtxoScript)>, Error> {
+    pub fn get_offchain_addresses(&self) -> Result<Vec<(ArkAddress, DefaultVtxo)>, Error> {
         let address = self.get_offchain_address().unwrap();
 
         Ok(vec![address])
     }
 
     pub fn get_onchain_address(&self) -> Result<Address, Error> {
-        let pubkey = self.kp.public_key();
+        let pk = self.kp.public_key();
         let info = self.asp_info.clone().unwrap();
-        let pubkey = bitcoin::key::CompressedPublicKey::try_from(pubkey.to_public_key()).unwrap();
-        let address = Address::p2wpkh(&pubkey, info.network);
+        let pk = bitcoin::key::CompressedPublicKey(pk);
+        let address = Address::p2wpkh(&pk, info.network);
 
         Ok(address)
     }
 
-    pub fn get_boarding_address(&self) -> Result<BoardingAddress, Error> {
+    pub fn get_boarding_address(&self) -> Result<BoardingOutput, Error> {
         let asp_info = self.asp_info.clone().unwrap();
+
+        let asp_pk: PublicKey = asp_info.pubkey.parse().unwrap();
+        let (asp_pk, _) = asp_pk.inner.x_only_public_key();
+
+        let (owner_pk, _) = self.kp.public_key().x_only_public_key();
+
+        let exit_delay = asp_info.round_lifetime as u32;
 
         let network = asp_info.network;
 
-        let boarding_descriptor = asp_info.boarding_descriptor_template;
+        let address = BoardingOutput::new(
+            &self.secp,
+            asp_pk,
+            owner_pk,
+            asp_info.boarding_descriptor_template,
+            exit_delay,
+            network,
+        )?;
 
-        let asp_pk: PublicKey = asp_info.pubkey.parse().unwrap();
-
-        let owner_pk = self.kp.public_key();
-        let owner_xonly_pk = owner_pk.to_x_only_pubkey();
-
-        let unspendable_key: PublicKey = UNSPENDABLE_KEY.parse().unwrap();
-        let unspendable_key = unspendable_key.to_x_only_pubkey();
-
-        let mut pk_map = HashMap::new();
-
-        pk_map.insert("UNSPENDABLE_KEY".to_string(), unspendable_key);
-        pk_map.insert("USER_0".to_string(), owner_xonly_pk);
-        pk_map.insert("USER_1".to_string(), owner_xonly_pk);
-        pk_map.insert("ASP".to_string(), asp_pk.to_x_only_pubkey());
-
-        let mut t = default_vtxo_script::StrPkTranslator { pk_map };
-
-        let real_desc = boarding_descriptor.translate_pk(&mut t).unwrap();
-
-        let address = real_desc.address(network).unwrap();
-
-        let tr = match real_desc.clone() {
-            Descriptor::Tr(tr) => tr,
-            _ => unreachable!("Descriptor must be taproot"),
-        };
-
-        let ark_descriptor = asp_info
-            .orig_boarding_descriptor
-            .replace("USER", owner_xonly_pk.to_string().as_str());
-
-        Ok(BoardingAddress {
-            asp: asp_pk.inner,
-            owner: owner_pk,
-            address,
-            descriptor: tr,
-            ark_descriptor,
-        })
+        Ok(address)
     }
 
-    pub fn get_boarding_addresses(&self) -> Result<Vec<boarding_address::BoardingAddress>, Error> {
+    pub fn get_boarding_addresses(&self) -> Result<Vec<boarding_output::BoardingOutput>, Error> {
         let address = self.get_boarding_address()?;
         Ok(vec![address])
     }
@@ -282,14 +246,14 @@ where
         Ok(vtxos)
     }
 
-    pub async fn spendable_vtxos(&self) -> Result<Vec<(Vec<Vtxo>, DefaultVtxoScript)>, Error> {
+    pub async fn spendable_vtxos(&self) -> Result<Vec<(Vec<VtxoOutPoint>, DefaultVtxo)>, Error> {
         let addresses = self.get_offchain_addresses()?;
 
         let mut spendable = vec![];
-        for (address, script) in addresses.into_iter() {
+        for (address, vtxo) in addresses.into_iter() {
             let res = self.inner.list_vtxos(address).await?;
             // TODO: Filter expired VTXOs (using `extract_sequence_from_csv_sig_closure`).
-            spendable.push((res.spendable, script));
+            spendable.push((res.spendable, vtxo));
         }
 
         Ok(spendable)
@@ -297,8 +261,8 @@ where
 
     // In go client: Balance (minus the on-chain balance, TODO).
     pub async fn offchain_balance(&self) -> Result<Amount, Error> {
-        let vec = self.spendable_vtxos().await?;
-        let sum = vec
+        let list = self.spendable_vtxos().await?;
+        let sum = list
             .iter()
             .flat_map(|(vtxos, _)| vtxos)
             .fold(Amount::ZERO, |acc, x| acc + x.amount);
@@ -424,8 +388,8 @@ where
         &self,
     ) -> Result<
         (
-            Vec<(OutPoint, boarding_address::BoardingAddress)>,
-            Vec<(Vtxo, DefaultVtxoScript)>,
+            Vec<(OutPoint, boarding_output::BoardingOutput)>,
+            Vec<(VtxoOutPoint, DefaultVtxo)>,
             Amount,
         ),
         Error,
@@ -433,14 +397,14 @@ where
         // Get all known boarding addresses.
         let boarding_addresses = self.get_boarding_addresses().unwrap();
 
-        let mut boarding_inputs: Vec<(OutPoint, boarding_address::BoardingAddress)> = Vec::new();
+        let mut boarding_inputs: Vec<(OutPoint, boarding_output::BoardingOutput)> = Vec::new();
         let mut total_amount = Amount::ZERO;
 
         // Find outpoints for each boarding address.
         for boarding_address in boarding_addresses {
             if let Some((outpoint, amount)) = self
                 .blockchain
-                .find_outpoint(boarding_address.address.clone())
+                .find_outpoint(boarding_address.address())
                 .await
                 .unwrap()
             {
@@ -452,18 +416,18 @@ where
 
         let spendable_vtxos = self.spendable_vtxos().await.unwrap();
 
-        for (vtxos, _) in spendable_vtxos.iter() {
-            total_amount += vtxos
+        for (vtxo_outpoints, _) in spendable_vtxos.iter() {
+            total_amount += vtxo_outpoints
                 .iter()
                 .fold(Amount::ZERO, |acc, vtxo| acc + vtxo.amount)
         }
 
         let vtxo_inputs = spendable_vtxos
             .into_iter()
-            .flat_map(|(vtxos, descriptor)| {
-                vtxos
+            .flat_map(|(vtxo_outpoints, vtxo)| {
+                vtxo_outpoints
                     .into_iter()
-                    .map(|vtxo| (vtxo, descriptor.clone()))
+                    .map(|vtxo_outpoint| (vtxo_outpoint, vtxo.clone()))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -475,8 +439,8 @@ where
     async fn join_next_ark_round<R>(
         &self,
         rng: &mut R,
-        boarding_inputs: Vec<(OutPoint, boarding_address::BoardingAddress)>,
-        vtxo_inputs: Vec<(Vtxo, DefaultVtxoScript)>,
+        boarding_inputs: Vec<(OutPoint, boarding_output::BoardingOutput)>,
+        vtxo_inputs: Vec<(VtxoOutPoint, DefaultVtxo)>,
         output_type: RoundOutputType,
     ) -> Result<Txid, Error>
     where
@@ -496,12 +460,12 @@ where
                         txid: o.txid,
                         vout: o.vout,
                     }),
-                    descriptor: d.ark_descriptor,
+                    descriptor: d.ark_descriptor().to_string(),
                 });
 
             let vtxo_inputs = vtxo_inputs.clone().into_iter().map(|(o, d)| RoundInputs {
                 outpoint: o.outpoint,
-                descriptor: d.ark_descriptor,
+                descriptor: d.ark_descriptor().to_string(),
             });
 
             boarding_inputs.chain(vtxo_inputs).collect()
@@ -583,12 +547,11 @@ where
         let mut step = RoundStep::Start;
 
         let asp_pk: secp256k1::PublicKey = asp_info.pubkey.parse().unwrap();
-        let sweep_closure = CsvSigClosure {
-            pk: asp_pk,
-            timeout: asp_info.round_lifetime,
-        };
+        let (asp_pk, _) = asp_pk.x_only_public_key();
+        let internal_node_script =
+            VtxoTreeInternalNodeScript::new(asp_info.round_lifetime as u32, asp_pk);
 
-        let sweep_tap_leaf = sweep_closure.leaf();
+        let sweep_tap_leaf = internal_node_script.leaf();
 
         let mut round_id: Option<String> = None;
         let mut unsigned_round_tx: Option<Psbt> = None;
@@ -992,18 +955,17 @@ where
 
     // In go client: SendAsync.
     pub async fn send_oor(&self, address: ArkAddress, amount: Amount) -> Result<Txid, Error> {
-        // 1. get spendable VTXOs & script/descriptor for each VTXO
-        let spendable_vtxos_and_script = self.spendable_vtxos().await?;
+        let spendable_vtxos = self.spendable_vtxos().await?;
 
-        // 2. run coin selection algorithm on candidates
-        let spendable_vtxos_only = spendable_vtxos_and_script
+        // Run coin selection algorithm on candidate spendable VTXOs.
+        let spendable_vtxo_outpoints = spendable_vtxos
             .iter()
             .flat_map(|(vtxos, _)| vtxos.clone())
             .collect::<Vec<_>>();
 
         let (_, selected_coins, change_amount) = coin_select(
             vec![],
-            spendable_vtxos_only,
+            spendable_vtxo_outpoints,
             amount,
             self.asp_info.clone().unwrap().dust,
             true,
@@ -1011,39 +973,40 @@ where
 
         let mut change_output = None;
         if change_amount > Amount::ZERO {
-            // 3. get new change address for sender
+            // Get new change address for sender.
             let (change_address, _) = self.get_offchain_address()?;
             change_output.replace((change_address, change_amount));
         }
 
-        let selected_coins =
-            selected_coins
-                .into_iter()
-                .map(|coin| {
-                    let script = spendable_vtxos_and_script.clone().into_iter().find_map(
-                        |(vtxos, script)| {
-                            if vtxos.contains(&coin) {
-                                Some(script)
-                            } else {
-                                None
-                            }
-                        },
-                    );
-                    (coin, script.unwrap())
-                })
-                .collect::<Vec<(_, _)>>();
+        let selected_vtxos = selected_coins
+            .into_iter()
+            .map(|vtxo_outpoint| {
+                let vtxo = spendable_vtxos
+                    .clone()
+                    .into_iter()
+                    .find_map(|(vtxo_outpoints, vtxo)| {
+                        if vtxo_outpoints.contains(&vtxo_outpoint) {
+                            Some(vtxo)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap();
+                (vtxo_outpoint, vtxo)
+            })
+            .collect::<Vec<(_, _)>>();
 
-        let inputs = selected_coins
+        let inputs = selected_vtxos
             .iter()
-            .map(|(vtxo, script)| {
-                let (forfeit_script, control_block) = script.forfeit_spend_info();
+            .map(|(vtxo_outpoint, vtxo)| {
+                let (forfeit_script, control_block) = vtxo.forfeit_spend_info();
                 let leaf_hash =
                     TapLeafHash::from_script(&forfeit_script, control_block.leaf_version);
 
                 PaymentInput {
                     forfeit_leaf_hash: leaf_hash,
-                    outpoint: vtxo.outpoint,
-                    descriptor: script.ark_descriptor.clone(),
+                    outpoint: vtxo_outpoint.outpoint,
+                    descriptor: vtxo.ark_descriptor().to_string(),
                 }
             })
             .collect::<Vec<_>>();
@@ -1066,14 +1029,13 @@ where
             .collect::<Vec<_>>();
 
         // Sign all redeem transaction inputs (could be multiple VTXOs!).
-        for (vtxo, vtxo_script) in selected_coins.iter() {
+        for (vtxo_outpoint, vtxo) in selected_vtxos.iter() {
             for (i, psbt_input) in signed_redeem_psbt.inputs.iter_mut().enumerate() {
                 let psbt_input_outpoint = signed_redeem_psbt.unsigned_tx.input[i].previous_output;
 
-                let vtxo_outpoint = vtxo.outpoint.expect("outpoint");
-                if psbt_input_outpoint == vtxo_outpoint {
+                if psbt_input_outpoint == vtxo_outpoint.outpoint.expect("outpoint") {
                     // In the case of input VTXOs, we are actually using a script spend path.
-                    let (forfeit_script, forfeit_control_block) = vtxo_script.forfeit_spend_info();
+                    let (forfeit_script, forfeit_control_block) = vtxo.forfeit_spend_info();
 
                     let leaf_version = forfeit_control_block.leaf_version;
                     psbt_input.tap_scripts = BTreeMap::from_iter([(
@@ -1131,18 +1093,18 @@ where
             base64::engine::GeneralPurposeConfig::new(),
         );
 
-        let vtxos = self.spendable_vtxos().await.unwrap();
+        let spendable_vtxos = self.spendable_vtxos().await.unwrap();
 
         let mut congestion_trees = HashMap::new();
         let mut redeem_branches = HashMap::new();
-        for (vtxo_list, _) in vtxos.into_iter() {
-            for vtxo in vtxo_list.into_iter() {
+        for (vtxo_outpoints, _) in spendable_vtxos.into_iter() {
+            for vtxo_outpoint in vtxo_outpoints.into_iter() {
                 // TODO: Handle exit for pending changes (taken from go implementation).
-                if !vtxo.redeem_tx.is_empty() {
+                if !vtxo_outpoint.redeem_tx.is_empty() {
                     continue;
                 }
 
-                let round_txid = &vtxo.round_txid;
+                let round_txid = &vtxo_outpoint.round_txid;
                 let round = self.inner.get_round(round_txid.clone()).await?.unwrap();
 
                 let round_psbt = base64.decode(&round.round_tx).unwrap();
@@ -1161,7 +1123,7 @@ where
                 let psbt = Psbt::deserialize(&psbt).unwrap();
 
                 for (_, (script, _)) in psbt.inputs[VTXO_INPUT_INDEX].tap_scripts.iter() {
-                    let lifetime = extract_sequence_from_csv_sig_closure(script).unwrap();
+                    let lifetime = extract_sequence_from_csv_sig_script(script).unwrap();
                     let _lifetime = match lifetime.to_relative_lock_time().unwrap() {
                         relative::LockTime::Time(time) => {
                             Duration::from_secs(time.value() as u64 * 512)
@@ -1171,7 +1133,7 @@ where
                         }
                     };
 
-                    let vtxo_txid = vtxo.outpoint.expect("outpoint").txid.to_string();
+                    let vtxo_txid = vtxo_outpoint.outpoint.expect("outpoint").txid.to_string();
                     let leaf_node = congestion_tree
                         .levels
                         .last()
@@ -1207,7 +1169,7 @@ where
                         vtxo_txid,
                         (
                             RedeemBranch {
-                                _vtxo: vtxo.clone(),
+                                _vtxo: vtxo_outpoint.clone(),
                                 branch,
                                 _lifetime,
                             },
@@ -1309,7 +1271,7 @@ where
 
     fn create_and_sign_forfeit_txs(
         &self,
-        vtxo_inputs: Vec<(Vtxo, DefaultVtxoScript)>,
+        vtxos: Vec<(VtxoOutPoint, DefaultVtxo)>,
         connectors: Vec<String>,
         min_relay_fee_rate_sats_per_kvb: i64,
     ) -> Result<Vec<Psbt>, Error> {
@@ -1340,13 +1302,10 @@ where
         let forfeit_address = forfeit_address.require_network(asp_info.network).unwrap();
 
         let mut signed_forfeit_psbts = Vec::new();
-        for (vtxo, vtxo_descriptor) in vtxo_inputs.iter() {
-            let min_relay_fee = compute_forfeit_min_relay_fee(
-                fee_rate_sats_per_kvb,
-                vtxo_descriptor,
-                forfeit_address.clone(),
-            )
-            .unwrap();
+        for (vtxo_outpoint, vtxo) in vtxos.iter() {
+            let min_relay_fee =
+                compute_forfeit_min_relay_fee(fee_rate_sats_per_kvb, vtxo, forfeit_address.clone())
+                    .unwrap();
 
             let mut connector_inputs = Vec::new();
             for connector_psbt in connector_psbts.iter() {
@@ -1365,7 +1324,7 @@ where
             }
 
             let forfeit_output = TxOut {
-                value: vtxo.amount + connector_amount - min_relay_fee,
+                value: vtxo_outpoint.amount + connector_amount - min_relay_fee,
                 script_pubkey: forfeit_address.script_pubkey(),
             };
 
@@ -1383,7 +1342,7 @@ where
                             ..Default::default()
                         },
                         TxIn {
-                            previous_output: vtxo.outpoint.expect("outpoint"),
+                            previous_output: vtxo_outpoint.outpoint.expect("outpoint"),
                             ..Default::default()
                         },
                     ],
@@ -1395,8 +1354,8 @@ where
                     Some(connector_output.clone());
 
                 forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].witness_utxo = Some(TxOut {
-                    value: vtxo.amount,
-                    script_pubkey: vtxo_descriptor.descriptor.script_pubkey(),
+                    value: vtxo_outpoint.amount,
+                    script_pubkey: vtxo.script_pubkey(),
                 });
 
                 forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].sighash_type =
@@ -1406,7 +1365,7 @@ where
             }
 
             for forfeit_psbt in forfeit_psbts.iter_mut() {
-                let (forfeit_script, forfeit_control_block) = vtxo_descriptor.forfeit_spend_info();
+                let (forfeit_script, forfeit_control_block) = vtxo.forfeit_spend_info();
 
                 let leaf_version = forfeit_control_block.leaf_version;
                 forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].tap_scripts = BTreeMap::from_iter([(

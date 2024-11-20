@@ -35,7 +35,7 @@ pub async fn e2e() {
     let alice_boarding_address = alice.get_boarding_address().unwrap();
 
     let boarding_output = nigiri
-        .faucet_fund(alice_boarding_address.address, Amount::ONE_BTC)
+        .faucet_fund(alice_boarding_address.address(), Amount::ONE_BTC)
         .await;
 
     tracing::debug!("Boarding output: {boarding_output:?}");
@@ -158,7 +158,7 @@ impl Nigiri {
         }
     }
 
-    async fn faucet_fund(&self, address: Address, amount: Amount) -> OutPoint {
+    async fn faucet_fund(&self, address: &Address, amount: Amount) -> OutPoint {
         let res = Command::new("nigiri")
             .args(["faucet", &address.to_string(), &amount.to_btc().to_string()])
             .output()
@@ -203,7 +203,7 @@ impl Nigiri {
             vout: vout as u32,
         };
         let mut guard = self.utxos.lock().unwrap();
-        guard.insert(address, (point, amount));
+        guard.insert(address.clone(), (point, amount));
 
         point
     }
@@ -211,7 +211,7 @@ impl Nigiri {
     async fn _mine(&self, n: u32) {
         for _ in 0..n {
             self.faucet_fund(
-                Address::from_str("bcrt1q8frde3yn78tl9ecgq4anlz909jh0clefhucdur")
+                &Address::from_str("bcrt1q8frde3yn78tl9ecgq4anlz909jh0clefhucdur")
                     .unwrap()
                     .assume_checked(),
                 Amount::from_sat(10_000),
@@ -222,12 +222,9 @@ impl Nigiri {
 }
 
 impl Blockchain for Nigiri {
-    async fn find_outpoint(
-        &self,
-        address: bitcoin::Address,
-    ) -> Result<Option<(OutPoint, Amount)>, Error> {
+    async fn find_outpoint(&self, address: &Address) -> Result<Option<(OutPoint, Amount)>, Error> {
         let guard = self.utxos.lock().unwrap();
-        let value = guard.get(&address);
+        let value = guard.get(address);
         if let Some((outpoint, _amount)) = value {
             let option = self
                 .esplora_client
