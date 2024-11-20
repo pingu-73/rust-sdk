@@ -9,6 +9,7 @@ use crate::generated::ark::v1::CompletePaymentRequest;
 use crate::generated::ark::v1::CreatePaymentRequest;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetInfoRequest;
+use crate::generated::ark::v1::GetRoundRequest;
 use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::ListVtxosRequest;
 use crate::generated::ark::v1::Outpoint;
@@ -130,6 +131,17 @@ pub enum RoundStreamEvent {
     RoundFailed(RoundFailedEvent),
     RoundSigning(RoundSigningEvent),
     RoundSigningNoncesGenerated(RoundSigningNoncesGeneratedEvent),
+}
+
+pub struct Round {
+    pub id: String,
+    pub start: i64,
+    pub end: i64,
+    pub round_tx: String,
+    pub vtxo_tree: Option<Tree>,
+    pub forfeit_txs: Vec<String>,
+    pub connectors: Vec<String>,
+    pub stage: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -431,6 +443,19 @@ impl Client {
 
         Ok(stream.boxed())
     }
+
+    pub async fn get_round(&self, round_txid: String) -> Result<Option<Round>, Error> {
+        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+
+        let response = inner
+            .get_round(GetRoundRequest { txid: round_txid })
+            .await
+            .unwrap();
+
+        let response = response.into_inner();
+        Ok(response.round.map(Round::from))
+    }
+
 }
 
 impl From<crate::generated::ark::v1::PingResponse> for PingResponse {
@@ -572,6 +597,21 @@ impl From<crate::generated::ark::v1::get_event_stream_response::Event> for Round
             crate::generated::ark::v1::get_event_stream_response::Event::RoundSigningNoncesGenerated(e) => {
                 RoundStreamEvent::RoundSigningNoncesGenerated(e.into())
             }
+        }
+    }
+}
+
+impl From<crate::generated::ark::v1::Round> for Round {
+    fn from(value: crate::generated::ark::v1::Round) -> Self {
+        Round {
+            id: value.id,
+            start: value.start,
+            end: value.end,
+            round_tx: value.round_tx,
+            vtxo_tree: value.vtxo_tree.map(|tree| tree.into()),
+            forfeit_txs: value.forfeit_txs,
+            connectors: value.connectors,
+            stage: value.stage,
         }
     }
 }

@@ -13,7 +13,6 @@ use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
 use crate::default_vtxo_script::DefaultVtxoScript;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
-use crate::generated::ark::v1::GetRoundRequest;
 use crate::script::extract_sequence_from_csv_sig_closure;
 use crate::script::CsvSigClosure;
 use base64::Engine;
@@ -1142,8 +1141,6 @@ where
 
         let vtxos = self.spendable_vtxos().await.unwrap();
 
-        let mut client = self.inner.inner.clone().unwrap();
-
         let mut congestion_trees = HashMap::new();
         let mut redeem_branches = HashMap::new();
         for (vtxo_list, _) in vtxos.into_iter() {
@@ -1154,15 +1151,7 @@ where
                 }
 
                 let round_txid = &vtxo.round_txid;
-                let round = client
-                    .get_round(GetRoundRequest {
-                        txid: round_txid.clone(),
-                    })
-                    .await
-                    .unwrap()
-                    .into_inner()
-                    .round
-                    .unwrap();
+                let round = self.inner.get_round(round_txid.clone()).await?.unwrap();
 
                 let round_psbt = base64.decode(&round.round_tx).unwrap();
                 let round_psbt = Psbt::deserialize(&round_psbt).unwrap();
