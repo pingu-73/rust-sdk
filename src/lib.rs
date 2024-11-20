@@ -14,7 +14,6 @@ use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::generated::ark::v1::get_event_stream_response;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetRoundRequest;
-use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::Tree;
 use crate::script::extract_sequence_from_csv_sig_closure;
@@ -952,19 +951,9 @@ where
                                 }
                             }
 
-                            let signed_forfeit_psbts = signed_forfeit_psbts
-                                .into_iter()
-                                .map(|psbt| base64.encode(psbt.serialize()))
-                                .collect();
-                            let signed_round_psbt = base64.encode(round_psbt.serialize());
-
-                            dont_use_client
-                                .submit_signed_forfeit_txs(SubmitSignedForfeitTxsRequest {
-                                    signed_forfeit_txs: signed_forfeit_psbts,
-                                    signed_round_tx: Some(signed_round_psbt),
-                                })
-                                .await
-                                .unwrap();
+                            client
+                                .submit_signed_forfeit_txs(signed_forfeit_psbts, round_psbt)
+                                .await?;
 
                             step = step.next();
                         }
