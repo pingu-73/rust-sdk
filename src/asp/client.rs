@@ -4,6 +4,10 @@ use crate::asp::types::ListVtxo;
 use crate::asp::types::Vtxo;
 use crate::error::Error;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
+use crate::generated::ark::v1::AsyncPaymentInput;
+use crate::generated::ark::v1::CompletePaymentRequest;
+use crate::generated::ark::v1::CreatePaymentRequest;
+use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetInfoRequest;
 use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::ListVtxosRequest;
@@ -12,10 +16,11 @@ use crate::generated::ark::v1::Output;
 use crate::generated::ark::v1::PingRequest;
 use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
 use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
-use crate::generated::ark::v1::{AsyncPaymentInput, SubmitTreeNoncesRequest};
-use crate::generated::ark::v1::{CompletePaymentRequest, SubmitTreeSignaturesRequest};
-use crate::generated::ark::v1::{CreatePaymentRequest, SubmitSignedForfeitTxsRequest};
+use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
+use crate::generated::ark::v1::SubmitTreeNoncesRequest;
+use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::tree;
+use async_stream::stream;
 use base64::Engine;
 use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
@@ -25,6 +30,9 @@ use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::TapLeafHash;
 use bitcoin::Txid;
+use futures::Stream;
+use futures::StreamExt;
+use futures::TryStreamExt;
 use tonic::transport::Channel;
 
 pub struct PaymentInput {
@@ -108,6 +116,15 @@ pub struct RoundSigningNoncesGeneratedEvent {
 
 #[derive(Debug, Clone)]
 pub enum PingResponseType {
+    RoundFinalization(RoundFinalizationEvent),
+    RoundFinalized(RoundFinalizedEvent),
+    RoundFailed(RoundFailedEvent),
+    RoundSigning(RoundSigningEvent),
+    RoundSigningNoncesGenerated(RoundSigningNoncesGeneratedEvent),
+}
+
+#[derive(Debug, Clone)]
+pub enum RoundStreamEvent {
     RoundFinalization(RoundFinalizationEvent),
     RoundFinalized(RoundFinalizedEvent),
     RoundFailed(RoundFailedEvent),
@@ -379,6 +396,41 @@ impl Client {
 
         Ok(())
     }
+
+    pub async fn get_event_stream(
+        &self,
+    ) -> Result<impl Stream<Item = Result<RoundStreamEvent, Error>> + Unpin, Error> {
+        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+
+        let response = inner
+            .get_event_stream(GetEventStreamRequest {})
+            .await
+            .unwrap();
+        let mut stream = response.into_inner();
+
+        let stream = stream! {
+            loop {
+                match stream.try_next().await {
+                    Ok(Some(event)) => match event.event {
+                        None => {
+                            tracing::debug!("Got empty message");
+                        }
+                        Some(event) => {
+                            yield Ok(RoundStreamEvent::from(event));
+                        }
+                    },
+                    Ok(None) => {
+                        yield Err(Error::EvenStreamEnded);
+                    }
+                    Err(er) => {
+                        yield Err(Error::EventStreamError(er));
+                    }
+                }
+            }
+        };
+
+        Ok(stream.boxed())
+    }
 }
 
 impl From<crate::generated::ark::v1::PingResponse> for PingResponse {
@@ -446,6 +498,80 @@ impl From<crate::generated::ark::v1::Node> for Node {
             txid: value.txid,
             tx: value.tx,
             parent_txid: value.parent_txid,
+        }
+    }
+}
+
+impl From<crate::generated::ark::v1::RoundFinalizationEvent> for RoundFinalizationEvent {
+    fn from(value: crate::generated::ark::v1::RoundFinalizationEvent) -> Self {
+        RoundFinalizationEvent {
+            id: value.id,
+            round_tx: value.round_tx,
+            vtxo_tree: value.vtxo_tree.map(|tree| tree.into()),
+            connectors: value.connectors,
+            min_relay_fee_rate: value.min_relay_fee_rate,
+        }
+    }
+}
+
+impl From<crate::generated::ark::v1::RoundFinalizedEvent> for RoundFinalizedEvent {
+    fn from(value: crate::generated::ark::v1::RoundFinalizedEvent) -> Self {
+        RoundFinalizedEvent {
+            id: value.id,
+            round_txid: value.round_txid,
+        }
+    }
+}
+
+impl From<crate::generated::ark::v1::RoundFailed> for RoundFailedEvent {
+    fn from(value: crate::generated::ark::v1::RoundFailed) -> Self {
+        RoundFailedEvent {
+            id: value.id,
+            reason: value.reason,
+        }
+    }
+}
+
+impl From<crate::generated::ark::v1::RoundSigningEvent> for RoundSigningEvent {
+    fn from(value: crate::generated::ark::v1::RoundSigningEvent) -> Self {
+        RoundSigningEvent {
+            id: value.id,
+            cosigners_pubkeys: value.cosigners_pubkeys,
+            unsigned_vtxo_tree: value.unsigned_vtxo_tree.map(|tree| tree.into()),
+            unsigned_round_tx: value.unsigned_round_tx,
+        }
+    }
+}
+
+impl From<crate::generated::ark::v1::RoundSigningNoncesGeneratedEvent>
+    for RoundSigningNoncesGeneratedEvent
+{
+    fn from(value: crate::generated::ark::v1::RoundSigningNoncesGeneratedEvent) -> Self {
+        RoundSigningNoncesGeneratedEvent {
+            id: value.id,
+            tree_nonces: value.tree_nonces,
+        }
+    }
+}
+
+impl From<crate::generated::ark::v1::get_event_stream_response::Event> for RoundStreamEvent {
+    fn from(value: crate::generated::ark::v1::get_event_stream_response::Event) -> Self {
+        match value {
+            crate::generated::ark::v1::get_event_stream_response::Event::RoundFinalization(e) => {
+                RoundStreamEvent::RoundFinalization(e.into())
+            }
+            crate::generated::ark::v1::get_event_stream_response::Event::RoundFinalized(e) => {
+                RoundStreamEvent::RoundFinalized(e.into())
+            }
+            crate::generated::ark::v1::get_event_stream_response::Event::RoundFailed(e) => {
+                RoundStreamEvent::RoundFailed(e.into())
+            }
+            crate::generated::ark::v1::get_event_stream_response::Event::RoundSigning(e) => {
+                RoundStreamEvent::RoundSigning(e.into())
+            }
+            crate::generated::ark::v1::get_event_stream_response::Event::RoundSigningNoncesGenerated(e) => {
+                RoundStreamEvent::RoundSigningNoncesGenerated(e.into())
+            }
         }
     }
 }

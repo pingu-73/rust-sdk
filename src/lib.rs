@@ -4,6 +4,8 @@ use crate::asp::PaymentInput;
 use crate::asp::PaymentOutput;
 use crate::asp::RoundInputs;
 use crate::asp::RoundOutputs;
+use crate::asp::RoundStreamEvent;
+use crate::asp::Tree;
 use crate::asp::Vtxo;
 use crate::boarding_address::BoardingAddress;
 use crate::coinselect::coin_select;
@@ -11,10 +13,7 @@ use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
 use crate::default_vtxo_script::DefaultVtxoScript;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
-use crate::generated::ark::v1::get_event_stream_response;
-use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetRoundRequest;
-use crate::generated::ark::v1::Tree;
 use crate::script::extract_sequence_from_csv_sig_closure;
 use crate::script::CsvSigClosure;
 use base64::Engine;
@@ -587,13 +586,8 @@ where
         tokio::spawn(ping_task);
 
         let client = self.inner.clone();
-        let mut dont_use_client = self.inner.inner.clone().unwrap();
 
-        let response = dont_use_client
-            .get_event_stream(GetEventStreamRequest {})
-            .await
-            .unwrap();
-        let mut stream = response.into_inner();
+        let mut stream = client.get_event_stream().await?;
 
         let mut step = RoundStep::Start;
 
@@ -614,12 +608,9 @@ where
         let mut our_nonce_tree: Option<Vec<Vec<Option<(MusigSecNonce, MusigPubNonce)>>>> = None;
         loop {
             match stream.next().await {
-                Some(Ok(res)) => {
-                    match res.event {
-                        None => {
-                            tracing::debug!("Got empty message");
-                        }
-                        Some(get_event_stream_response::Event::RoundSigning(e)) => {
+                Some(Ok(event)) => {
+                    match event {
+                        RoundStreamEvent::RoundSigning(e) => {
                             if step != RoundStep::Start {
                                 continue;
                             }
@@ -703,7 +694,7 @@ where
                             step = step.next();
                             continue;
                         }
-                        Some(get_event_stream_response::Event::RoundSigningNoncesGenerated(e)) => {
+                        RoundStreamEvent::RoundSigningNoncesGenerated(e) => {
                             if step != RoundStep::RoundSigningStarted {
                                 continue;
                             }
@@ -849,7 +840,7 @@ where
 
                             step = step.next();
                         }
-                        Some(get_event_stream_response::Event::RoundFinalization(e)) => {
+                        RoundStreamEvent::RoundFinalization(e) => {
                             if step != RoundStep::RoundSigningNoncesGenerated {
                                 continue;
                             }
@@ -948,7 +939,7 @@ where
 
                             step = step.next();
                         }
-                        Some(get_event_stream_response::Event::RoundFinalized(e)) => {
+                        RoundStreamEvent::RoundFinalized(e) => {
                             if step != RoundStep::RoundFinalization {
                                 continue;
                             }
@@ -959,7 +950,7 @@ where
 
                             return Ok(txid);
                         }
-                        Some(get_event_stream_response::Event::RoundFailed(e)) => {
+                        RoundStreamEvent::RoundFailed(e) => {
                             if Some(&e.id) == round_id.as_ref() {
                                 tracing::error!(
                                     round_id = e.id,
