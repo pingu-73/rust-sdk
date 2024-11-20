@@ -58,6 +58,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Vtxo {
+    // TODO: can a VTXO without an outpoint exist?
     pub outpoint: Option<OutPoint>,
     pub spent: bool,
     pub round_txid: String,

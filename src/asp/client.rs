@@ -12,9 +12,11 @@ use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::ListVtxosRequest;
 use crate::generated::ark::v1::Outpoint;
 use crate::generated::ark::v1::Output;
+use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
 use base64::Engine;
 use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
+use bitcoin::secp256k1::PublicKey;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
@@ -31,6 +33,11 @@ pub struct PaymentInput {
 pub struct PaymentOutput {
     pub address: ArkAddress,
     pub amount: Amount,
+}
+
+pub struct RoundInputs {
+    pub outpoint: Option<OutPoint>,
+    pub descriptor: String,
 }
 
 pub struct Client {
@@ -86,6 +93,36 @@ impl Client {
             spent: spent?,
             spendable: spendable?,
         })
+    }
+
+    pub async fn register_inputs_for_next_round(
+        &self,
+        ephemeral_key: PublicKey,
+        inputs: Vec<RoundInputs>,
+    ) -> Result<String, Error> {
+        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+
+        let inputs = inputs
+            .iter()
+            .map(|input| Input {
+                outpoint: input.outpoint.map(|out| Outpoint {
+                    txid: out.txid.to_string(),
+                    vout: out.vout,
+                }),
+                descriptor: input.descriptor.clone(),
+            })
+            .collect();
+
+        let response = inner
+            .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
+                inputs,
+                ephemeral_pubkey: Some(ephemeral_key.to_string()),
+            })
+            .await
+            .unwrap();
+        let response = response.into_inner();
+
+        Ok(response.id)
     }
 
     pub async fn send_payment(

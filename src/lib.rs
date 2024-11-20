@@ -2,6 +2,7 @@ use crate::ark_address::ArkAddress;
 use crate::asp::ListVtxo;
 use crate::asp::PaymentInput;
 use crate::asp::PaymentOutput;
+use crate::asp::RoundInputs;
 use crate::asp::Vtxo;
 use crate::boarding_address::BoardingAddress;
 use crate::coinselect::coin_select;
@@ -12,11 +13,8 @@ use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::generated::ark::v1::get_event_stream_response;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetRoundRequest;
-use crate::generated::ark::v1::Input;
-use crate::generated::ark::v1::Outpoint;
 use crate::generated::ark::v1::Output;
 use crate::generated::ark::v1::PingRequest;
-use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
 use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
 use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
@@ -497,25 +495,35 @@ where
         // Generate an ephemeral key.
         let ephemeral_kp = Keypair::new(&self.secp, rng);
 
-        let inputs_api = {
-            let boarding_inputs = boarding_inputs.clone().into_iter().map(|(o, d)| Input {
-                outpoint: Some(Outpoint {
-                    txid: o.txid.to_string(),
-                    vout: o.vout,
-                }),
-                descriptor: d.ark_descriptor,
-            });
+        let inputs = {
+            let boarding_inputs = boarding_inputs
+                .clone()
+                .into_iter()
+                .map(|(o, d)| RoundInputs {
+                    outpoint: Some(OutPoint {
+                        txid: o.txid,
+                        vout: o.vout,
+                    }),
+                    descriptor: d.ark_descriptor,
+                });
 
-            let vtxo_inputs = vtxo_inputs.clone().into_iter().map(|(o, d)| Input {
-                outpoint: o.outpoint.map(|o| Outpoint {
-                    txid: o.txid.to_string(),
-                    vout: o.vout,
-                }),
+            let vtxo_inputs = vtxo_inputs.clone().into_iter().map(|(o, d)| RoundInputs {
+                outpoint: o.outpoint,
                 descriptor: d.ark_descriptor,
             });
 
             boarding_inputs.chain(vtxo_inputs).collect()
         };
+
+        let register_inputs_for_next_round_id = self
+            .inner
+            .register_inputs_for_next_round(ephemeral_kp.public_key(), inputs)
+            .await?;
+
+        tracing::debug!(
+            id = register_inputs_for_next_round_id,
+            "Registered for round"
+        );
 
         let boarding_inputs: Vec<_> = boarding_inputs
             .clone()
@@ -524,23 +532,6 @@ where
             .collect::<Vec<_>>();
 
         let vtxo_inputs = vtxo_inputs.clone().into_iter().collect::<Vec<_>>();
-
-        let mut client = self.inner.inner.clone().unwrap();
-        let response = client
-            .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
-                inputs: inputs_api,
-                ephemeral_pubkey: Some(ephemeral_kp.public_key().to_string()),
-            })
-            .await
-            .unwrap()
-            .into_inner();
-
-        let register_inputs_for_next_round_id = response.id;
-
-        tracing::debug!(
-            id = register_inputs_for_next_round_id,
-            "Registered for round"
-        );
 
         let mut outputs = vec![];
 
@@ -569,6 +560,7 @@ where
             }
         }
 
+        let mut client = self.inner.inner.clone().unwrap();
         client
             .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
                 id: register_inputs_for_next_round_id.clone(),
@@ -1099,7 +1091,7 @@ where
             .iter()
             .map(|(vtxo, script)| {
                 let (forfeit_script, control_block) = script.forfeit_spend_info();
-                let mut leaf_hash =
+                let leaf_hash =
                     TapLeafHash::from_script(&forfeit_script, control_block.leaf_version);
 
                 PaymentInput {
