@@ -1,14 +1,17 @@
 use ark_rs::error::Error;
-use ark_rs::wallet::{BoardingWallet, OnchainWallet};
+use ark_rs::wallet::BoardingWallet;
+use ark_rs::wallet::OnchainWallet;
 use ark_rs::Blockchain;
 use ark_rs::Client;
 use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
-use bitcoin::secp256k1::{All, SecretKey};
+use bitcoin::secp256k1::All;
+use bitcoin::secp256k1::SecretKey;
 use bitcoin::Address;
 use bitcoin::Amount;
+use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Transaction;
 use bitcoin::Txid;
@@ -47,7 +50,8 @@ pub async fn e2e() {
         let asp_pk: PublicKey = alice_asp_info.pubkey.parse().unwrap();
         let (asp_pk, _) = asp_pk.inner.x_only_public_key();
 
-        alice_wallet
+        let wallet = alice_wallet.lock().unwrap();
+        wallet
             .get_boarding_address(
                 asp_pk,
                 alice_asp_info.round_lifetime as u32,
@@ -114,9 +118,17 @@ pub async fn e2e() {
         "Post settlement: Bob offchain balance: {bob_offchain_balance}"
     );
 
-    let onchain_address = alice_wallet
-        .get_onchain_address(alice.asp_info.clone().unwrap().network)
-        .unwrap();
+    let onchain_address = {
+        let mut wallet = alice_wallet.lock().unwrap();
+        wallet.get_onchain_address().unwrap()
+    };
+
+    let balance = {
+        // sync the wallet
+        let mut wallet = alice_wallet.lock().unwrap();
+        wallet.sync().await.unwrap();
+        wallet.balance().unwrap()
+    };
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
     let alice_vtxos = alice.list_vtxos().await.unwrap();
@@ -124,12 +136,20 @@ pub async fn e2e() {
         ?alice_vtxos,
         "Pre off-boarding: Alice offchain balance: {alice_offchain_balance}"
     );
+    tracing::debug!(?balance, "Pre off-boarding: Alice onchain balance");
     let txid = alice
         .off_board(&mut rng, onchain_address, Amount::ONE_BTC / 5)
         .await
         .unwrap();
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    let balance = {
+        // sync the wallet
+        let mut wallet = alice_wallet.lock().unwrap();
+        wallet.sync().await.unwrap();
+        wallet.balance().unwrap()
+    };
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
     let alice_vtxos = alice.list_vtxos().await.unwrap();
@@ -138,6 +158,7 @@ pub async fn e2e() {
         ?alice_vtxos,
         "Post off-boarding: Alice offchain balance: {alice_offchain_balance}"
     );
+    tracing::debug!(?balance, "Post off-boarding: Alice onchain balance");
 
     tracing::debug!(
         ?alice_vtxos,
@@ -293,8 +314,9 @@ async fn setup_client(
     kp: Keypair,
     nigiri: Arc<Nigiri>,
     secp: Secp256k1<All>,
-) -> (Client<Nigiri, wallet::Wallet>, wallet::Wallet) {
-    let wallet = wallet::Wallet::new(kp, secp);
+) -> (Client<Nigiri, wallet::Wallet>, Arc<Mutex<wallet::Wallet>>) {
+    let wallet = wallet::Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000");
+    let wallet = Arc::new(Mutex::new(wallet));
     let mut client = Client::new(name, kp, nigiri, wallet.clone());
 
     client.connect().await.unwrap();

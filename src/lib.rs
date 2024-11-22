@@ -14,7 +14,8 @@ use crate::default_vtxo::DefaultVtxo;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::internal_node::VtxoTreeInternalNodeScript;
 use crate::script::extract_sequence_from_csv_sig_script;
-use crate::wallet::{BoardingWallet, OnchainWallet};
+use crate::wallet::BoardingWallet;
+use crate::wallet::OnchainWallet;
 use base64::Engine;
 use bitcoin::absolute::LockTime;
 use bitcoin::consensus::deserialize;
@@ -52,6 +53,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use tonic::codegen::tokio_stream::StreamExt;
 use zkp::new_musig_nonce_pair;
@@ -103,7 +105,7 @@ pub struct Client<B, W> {
     blockchain: Arc<B>,
     secp: Secp256k1<All>,
     secp_zkp: zkp::Secp256k1<zkp::All>,
-    wallet: W,
+    wallet: Arc<Mutex<W>>,
 }
 
 enum RoundOutputType {
@@ -147,7 +149,7 @@ where
     B: Blockchain,
     W: BoardingWallet + OnchainWallet,
 {
-    pub fn new(name: String, kp: Keypair, blockchain: Arc<B>, wallet: W) -> Self {
+    pub fn new(name: String, kp: Keypair, blockchain: Arc<B>, wallet: Arc<Mutex<W>>) -> Self {
         let secp = Secp256k1::new();
         let secp_zkp = zkp::Secp256k1::new();
 
@@ -364,15 +366,17 @@ where
         let asp_info = self.asp_info.clone().unwrap();
         let asp_pk: PublicKey = asp_info.pubkey.parse().unwrap();
         let (asp_pk, _) = asp_pk.inner.x_only_public_key();
-        let boarding_addresses = self
-            .wallet
-            .get_boarding_addresses(
-                asp_pk,
-                asp_info.round_lifetime as u32,
-                asp_info.boarding_descriptor_template,
-                asp_info.network,
-            )
-            .unwrap();
+        let boarding_addresses = {
+            let wallet = self.wallet.lock().unwrap();
+            wallet
+                .get_boarding_addresses(
+                    asp_pk,
+                    asp_info.round_lifetime as u32,
+                    asp_info.boarding_descriptor_template,
+                    asp_info.network,
+                )
+                .unwrap()
+        };
 
         let mut boarding_inputs: Vec<(OutPoint, boarding_output::BoardingOutput)> = Vec::new();
         let mut total_amount = Amount::ZERO;
