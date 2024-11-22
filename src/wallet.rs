@@ -1,6 +1,6 @@
 use crate::boarding_output::BoardingOutput;
 use crate::error::Error;
-use bitcoin::{Network, XOnlyPublicKey};
+use bitcoin::{Address, Network, XOnlyPublicKey};
 
 pub trait BoardingWallet {
     fn get_boarding_address(
@@ -18,4 +18,8 @@ pub trait BoardingWallet {
         descriptor_template: String,
         network: Network,
     ) -> Result<Vec<BoardingOutput>, Error>;
+}
+
+pub trait OnchainWallet {
+    fn get_onchain_address(&self, network: Network) -> Result<Address, Error>;
 }

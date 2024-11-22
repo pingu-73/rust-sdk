@@ -14,7 +14,7 @@ use crate::default_vtxo::DefaultVtxo;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::internal_node::VtxoTreeInternalNodeScript;
 use crate::script::extract_sequence_from_csv_sig_script;
-use crate::wallet::BoardingWallet;
+use crate::wallet::{BoardingWallet, OnchainWallet};
 use base64::Engine;
 use bitcoin::absolute::LockTime;
 use bitcoin::consensus::deserialize;
@@ -145,7 +145,7 @@ struct RedeemBranch {
 impl<B, W> Client<B, W>
 where
     B: Blockchain,
-    W: BoardingWallet,
+    W: BoardingWallet + OnchainWallet,
 {
     pub fn new(name: String, kp: Keypair, blockchain: Arc<B>, wallet: W) -> Self {
         let secp = Secp256k1::new();
@@ -198,15 +198,6 @@ where
         let address = self.get_offchain_address().unwrap();
 
         Ok(vec![address])
-    }
-
-    pub fn get_onchain_address(&self) -> Result<Address, Error> {
-        let pk = self.kp.public_key();
-        let info = self.asp_info.clone().unwrap();
-        let pk = bitcoin::key::CompressedPublicKey(pk);
-        let address = Address::p2wpkh(&pk, info.network);
-
-        Ok(address)
     }
 
     pub async fn list_vtxos(&self) -> Result<Vec<ListVtxo>, Error> {

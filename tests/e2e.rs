@@ -1,6 +1,6 @@
 use ark_rs::boarding_output::BoardingOutput;
 use ark_rs::error::Error;
-use ark_rs::wallet::BoardingWallet;
+use ark_rs::wallet::{BoardingWallet, OnchainWallet};
 use ark_rs::Blockchain;
 use ark_rs::Client;
 use bitcoin::hex::FromHex;
@@ -113,7 +113,9 @@ pub async fn e2e() {
         "Post settlement: Bob offchain balance: {bob_offchain_balance}"
     );
 
-    let onchain_address = alice.get_onchain_address().unwrap();
+    let onchain_address = alice_wallet
+        .get_onchain_address(alice.asp_info.clone().unwrap().network)
+        .unwrap();
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
     let alice_vtxos = alice.list_vtxos().await.unwrap();
@@ -294,6 +296,16 @@ struct Wallet {
 impl Wallet {
     pub fn new(kp: Keypair, secp: Secp256k1<All>) -> Self {
         Self { kp, secp }
+    }
+}
+
+impl OnchainWallet for Wallet {
+    fn get_onchain_address(&self, network: Network) -> Result<Address, Error> {
+        let pk = self.kp.public_key();
+        let pk = bitcoin::key::CompressedPublicKey(pk);
+        let address = Address::p2wpkh(&pk, network);
+
+        Ok(address)
     }
 }
 
