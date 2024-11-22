@@ -7,7 +7,6 @@ use crate::asp::RoundOutputs;
 use crate::asp::RoundStreamEvent;
 use crate::asp::Tree;
 use crate::asp::VtxoOutPoint;
-use crate::boarding_output::BoardingOutput;
 use crate::coinselect::coin_select;
 use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
@@ -15,6 +14,7 @@ use crate::default_vtxo::DefaultVtxo;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::internal_node::VtxoTreeInternalNodeScript;
 use crate::script::extract_sequence_from_csv_sig_script;
+use crate::wallet::BoardingWallet;
 use base64::Engine;
 use bitcoin::absolute::LockTime;
 use bitcoin::consensus::deserialize;
@@ -86,6 +86,7 @@ mod forfeit_fee;
 mod internal_node;
 mod script;
 mod tree;
+pub mod wallet;
 
 // TODO: Figure out how to integrate on-chain wallet. Probably use a trait and implement using
 // `bdk`.
@@ -94,7 +95,7 @@ const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d
 
 const VTXO_INPUT_INDEX: usize = 0;
 
-pub struct Client<B> {
+pub struct Client<B, W> {
     inner: asp::Client,
     pub name: String,
     pub kp: Keypair,
@@ -102,6 +103,7 @@ pub struct Client<B> {
     blockchain: Arc<B>,
     secp: Secp256k1<All>,
     secp_zkp: zkp::Secp256k1<zkp::All>,
+    wallet: W,
 }
 
 enum RoundOutputType {
@@ -140,11 +142,12 @@ struct RedeemBranch {
     _lifetime: Duration,
 }
 
-impl<B> Client<B>
+impl<B, W> Client<B, W>
 where
     B: Blockchain,
+    W: BoardingWallet,
 {
-    pub fn new(name: String, kp: Keypair, blockchain: Arc<B>) -> Self {
+    pub fn new(name: String, kp: Keypair, blockchain: Arc<B>, wallet: W) -> Self {
         let secp = Secp256k1::new();
         let secp_zkp = zkp::Secp256k1::new();
 
@@ -158,6 +161,7 @@ where
             blockchain,
             secp,
             secp_zkp,
+            wallet,
         }
     }
 
@@ -203,35 +207,6 @@ where
         let address = Address::p2wpkh(&pk, info.network);
 
         Ok(address)
-    }
-
-    pub fn get_boarding_address(&self) -> Result<BoardingOutput, Error> {
-        let asp_info = self.asp_info.clone().unwrap();
-
-        let asp_pk: PublicKey = asp_info.pubkey.parse().unwrap();
-        let (asp_pk, _) = asp_pk.inner.x_only_public_key();
-
-        let (owner_pk, _) = self.kp.public_key().x_only_public_key();
-
-        let exit_delay = asp_info.round_lifetime as u32;
-
-        let network = asp_info.network;
-
-        let address = BoardingOutput::new(
-            &self.secp,
-            asp_pk,
-            owner_pk,
-            asp_info.boarding_descriptor_template,
-            exit_delay,
-            network,
-        )?;
-
-        Ok(address)
-    }
-
-    pub fn get_boarding_addresses(&self) -> Result<Vec<boarding_output::BoardingOutput>, Error> {
-        let address = self.get_boarding_address()?;
-        Ok(vec![address])
     }
 
     pub async fn list_vtxos(&self) -> Result<Vec<ListVtxo>, Error> {
@@ -395,7 +370,18 @@ where
         Error,
     > {
         // Get all known boarding addresses.
-        let boarding_addresses = self.get_boarding_addresses().unwrap();
+        let asp_info = self.asp_info.clone().unwrap();
+        let asp_pk: PublicKey = asp_info.pubkey.parse().unwrap();
+        let (asp_pk, _) = asp_pk.inner.x_only_public_key();
+        let boarding_addresses = self
+            .wallet
+            .get_boarding_addresses(
+                asp_pk,
+                asp_info.round_lifetime as u32,
+                asp_info.boarding_descriptor_template,
+                asp_info.network,
+            )
+            .unwrap();
 
         let mut boarding_inputs: Vec<(OutPoint, boarding_output::BoardingOutput)> = Vec::new();
         let mut total_amount = Amount::ZERO;

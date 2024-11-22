@@ -1,15 +1,18 @@
+use ark_rs::boarding_output::BoardingOutput;
 use ark_rs::error::Error;
+use ark_rs::wallet::BoardingWallet;
 use ark_rs::Blockchain;
 use ark_rs::Client;
 use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
+use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
-use bitcoin::secp256k1::SecretKey;
-use bitcoin::Address;
+use bitcoin::secp256k1::{All, SecretKey};
 use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::Transaction;
 use bitcoin::Txid;
+use bitcoin::{Address, Network, XOnlyPublicKey};
 use rand::thread_rng;
 use regex::Regex;
 use std::collections::HashMap;
@@ -30,9 +33,28 @@ pub async fn e2e() {
     let alice_key = SecretKey::new(&mut rng);
     let alice_keypair = Keypair::from_secret_key(&secp, &alice_key);
 
-    let alice = setup_client("alice".to_string(), alice_keypair, nigiri.clone()).await;
+    let (alice, alice_wallet) = setup_client(
+        "alice".to_string(),
+        alice_keypair,
+        nigiri.clone(),
+        secp.clone(),
+    )
+    .await;
 
-    let alice_boarding_address = alice.get_boarding_address().unwrap();
+    let alice_boarding_address = {
+        let alice_asp_info = alice.asp_info.clone().unwrap();
+        let asp_pk: PublicKey = alice_asp_info.pubkey.parse().unwrap();
+        let (asp_pk, _) = asp_pk.inner.x_only_public_key();
+
+        alice_wallet
+            .get_boarding_address(
+                asp_pk,
+                alice_asp_info.round_lifetime as u32,
+                alice_asp_info.boarding_descriptor_template,
+                alice_asp_info.network,
+            )
+            .unwrap()
+    };
 
     let boarding_output = nigiri
         .faucet_fund(alice_boarding_address.address(), Amount::ONE_BTC)
@@ -52,7 +74,8 @@ pub async fn e2e() {
     let bob_key = SecretKey::new(&mut rng);
     let bob_keypair = Keypair::from_secret_key(&secp, &bob_key);
 
-    let bob = setup_client("bob".to_string(), bob_keypair, nigiri.clone()).await;
+    let (bob, _bob_wallet) =
+        setup_client("bob".to_string(), bob_keypair, nigiri.clone(), secp).await;
 
     let bob_offchain_balance = bob.offchain_balance().await.unwrap();
     let bob_vtxos = bob.list_vtxos().await.unwrap();
@@ -262,12 +285,65 @@ impl Blockchain for Nigiri {
     }
 }
 
-async fn setup_client(name: String, kp: Keypair, nigiri: Arc<Nigiri>) -> Client<Nigiri> {
-    let mut client = Client::new(name, kp, nigiri);
+#[derive(Clone)]
+struct Wallet {
+    kp: Keypair,
+    secp: Secp256k1<All>,
+}
+
+impl Wallet {
+    pub fn new(kp: Keypair, secp: Secp256k1<All>) -> Self {
+        Self { kp, secp }
+    }
+}
+
+impl BoardingWallet for Wallet {
+    fn get_boarding_address(
+        &self,
+        asp_pubkey: XOnlyPublicKey,
+        exit_delay: u32,
+        descriptor_template: String,
+        network: Network,
+    ) -> Result<BoardingOutput, Error> {
+        let (owner_pk, _) = self.kp.public_key().x_only_public_key();
+
+        let address = BoardingOutput::new(
+            &self.secp,
+            asp_pubkey,
+            owner_pk,
+            descriptor_template,
+            exit_delay,
+            network,
+        )?;
+
+        Ok(address)
+    }
+
+    fn get_boarding_addresses(
+        &self,
+        asp_pubkey: XOnlyPublicKey,
+        exit_delay: u32,
+        descriptor_template: String,
+        network: Network,
+    ) -> Result<Vec<BoardingOutput>, Error> {
+        let boarding_output =
+            self.get_boarding_address(asp_pubkey, exit_delay, descriptor_template, network)?;
+        Ok(vec![boarding_output])
+    }
+}
+
+async fn setup_client(
+    name: String,
+    kp: Keypair,
+    nigiri: Arc<Nigiri>,
+    secp: Secp256k1<All>,
+) -> (Client<Nigiri, Wallet>, Wallet) {
+    let wallet = Wallet::new(kp, secp);
+    let mut client = Client::new(name, kp, nigiri, wallet.clone());
 
     client.connect().await.unwrap();
 
-    client
+    (client, wallet)
 }
 
 pub fn init_tracing() {
