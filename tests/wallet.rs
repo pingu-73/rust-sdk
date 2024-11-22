@@ -115,6 +115,7 @@ impl BoardingWallet for Wallet {
         descriptor_template: String,
         network: Network,
     ) -> Result<Vec<BoardingOutput>, Error> {
+        // TODO: use separeate keychain or bdk keychain for this and track this address
         let boarding_output =
             self.get_boarding_address(asp_pubkey, exit_delay, descriptor_template, network)?;
         Ok(vec![boarding_output])
