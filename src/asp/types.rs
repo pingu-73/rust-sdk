@@ -1,10 +1,8 @@
 use crate::generated;
-use crate::BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT;
 use bitcoin::Amount;
 use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Txid;
-use miniscript::Descriptor;
 use std::str::FromStr;
 
 #[derive(Clone, Debug)]
@@ -15,31 +13,15 @@ pub struct Info {
     pub round_interval: i64,
     pub network: Network,
     pub dust: Amount,
-    pub boarding_descriptor_template: Descriptor<String>,
+    pub boarding_descriptor_template: String,
     pub vtxo_descriptor_templates: Vec<String>,
     pub forfeit_address: String,
-    pub orig_boarding_descriptor: String,
 }
 
 impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
     type Error = crate::Error;
 
     fn try_from(value: generated::ark::v1::GetInfoResponse) -> Result<Self, Self::Error> {
-        // TODO: Remove Miniscript stuff.
-        // let boarding_descriptor = asp_info.boarding_descriptor_template.replace(' ', "");
-        let round_lifetime =
-            bitcoin::Sequence::from_seconds_floor(value.round_lifetime as u32).expect("valid");
-        let round_lifetime = round_lifetime.to_relative_lock_time().expect("relative");
-
-        let boarding_descriptor = BOARDING_DESCRIPTOR_TEMPLATE_MINISCRIPT.replace(
-            "TIMEOUT",
-            round_lifetime.to_consensus_u32().to_string().as_str(),
-        );
-        let boarding_descriptor = Descriptor::<String>::from_str(&boarding_descriptor).unwrap();
-        let orig_boarding_descriptor = value.boarding_descriptor_template;
-
-        debug_assert!(boarding_descriptor.sanity_check().is_ok());
-
         Ok(Info {
             pubkey: value.pubkey,
             round_lifetime: value.round_lifetime,
@@ -48,16 +30,16 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
             network: Network::from_str(value.network.as_str())
                 .map_err(|_| crate::Error::InvalidResponseType)?,
             dust: Amount::from_sat(value.dust as u64),
-            boarding_descriptor_template: boarding_descriptor,
+            boarding_descriptor_template: value.boarding_descriptor_template,
             vtxo_descriptor_templates: value.vtxo_descriptor_templates,
             forfeit_address: value.forfeit_address,
-            orig_boarding_descriptor,
         })
     }
 }
 
+// TODO: Perhaps we can find a better name.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Vtxo {
+pub struct VtxoOutPoint {
     // TODO: can a VTXO without an outpoint exist?
     pub outpoint: Option<OutPoint>,
     pub spent: bool,
@@ -74,15 +56,15 @@ pub struct Vtxo {
 
 #[derive(Clone, Debug)]
 pub struct ListVtxo {
-    pub spent: Vec<Vtxo>,
-    pub spendable: Vec<Vtxo>,
+    pub spent: Vec<VtxoOutPoint>,
+    pub spendable: Vec<VtxoOutPoint>,
 }
 
-impl TryFrom<&generated::ark::v1::Vtxo> for Vtxo {
+impl TryFrom<&generated::ark::v1::Vtxo> for VtxoOutPoint {
     type Error = crate::Error;
 
     fn try_from(value: &generated::ark::v1::Vtxo) -> Result<Self, Self::Error> {
-        Ok(Vtxo {
+        Ok(VtxoOutPoint {
             outpoint: value.outpoint.clone().map(|out| OutPoint {
                 txid: Txid::from_str(out.txid.as_str()).unwrap(),
                 vout: out.vout,

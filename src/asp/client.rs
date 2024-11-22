@@ -1,7 +1,7 @@
 use crate::ark_address::ArkAddress;
 use crate::asp::types::Info;
 use crate::asp::types::ListVtxo;
-use crate::asp::types::Vtxo;
+use crate::asp::types::VtxoOutPoint;
 use crate::error::AspApiError;
 use crate::error::Error;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
@@ -166,17 +166,17 @@ impl Client {
             .list_vtxos(ListVtxosRequest { address })
             .await
             .unwrap();
-        let spent: Result<Vec<Vtxo>, Error> = response
+        let spent: Result<Vec<VtxoOutPoint>, Error> = response
             .get_ref()
             .spendable_vtxos
             .iter()
-            .map(Vtxo::try_from)
+            .map(VtxoOutPoint::try_from)
             .collect();
-        let spendable: Result<Vec<Vtxo>, Error> = response
+        let spendable: Result<Vec<VtxoOutPoint>, Error> = response
             .get_ref()
             .spendable_vtxos
             .iter()
-            .map(Vtxo::try_from)
+            .map(VtxoOutPoint::try_from)
             .collect();
 
         Ok(ListVtxo {

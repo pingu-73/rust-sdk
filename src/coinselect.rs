@@ -1,4 +1,4 @@
-use crate::asp::Vtxo;
+use crate::asp::VtxoOutPoint;
 use crate::error::Error;
 use bitcoin::Amount;
 
@@ -9,11 +9,11 @@ pub struct Utxo {
 
 pub fn coin_select(
     boarding_utxos: Vec<Utxo>,
-    mut vtxos: Vec<Vtxo>,
+    mut vtxo_outpoints: Vec<VtxoOutPoint>,
     amount: Amount,
     dust: Amount,
     sort_by_expiration_time: bool,
-) -> Result<(Vec<Utxo>, Vec<Vtxo>, Amount), Error> {
+) -> Result<(Vec<Utxo>, Vec<VtxoOutPoint>, Amount), Error> {
     let mut selected = Vec::new();
     let mut not_selected = Vec::new();
     let mut selected_boarding = Vec::new();
@@ -22,7 +22,7 @@ pub fn coin_select(
 
     if sort_by_expiration_time {
         // Sort vtxos by expiration (older first)
-        vtxos.sort_by(|a, b| a.expire_at.cmp(&b.expire_at));
+        vtxo_outpoints.sort_by(|a, b| a.expire_at.cmp(&b.expire_at));
 
         // Sort boarding utxos by spendable time
         // boarding_utxos.sort_by(|a, b| a.spendable_at.cmp(&b.spendable_at));
@@ -40,12 +40,12 @@ pub fn coin_select(
     }
 
     // Process VTXOs
-    for vtxo in vtxos {
+    for vtxo_outpoint in vtxo_outpoints {
         if selected_amount >= amount {
-            not_selected.push(vtxo);
+            not_selected.push(vtxo_outpoint);
         } else {
-            selected.push(vtxo.clone());
-            selected_amount += vtxo.amount;
+            selected.push(vtxo_outpoint.clone());
+            selected_amount += vtxo_outpoint.amount;
         }
     }
 
@@ -73,8 +73,8 @@ pub fn coin_select(
 mod tests {
     use super::*;
 
-    fn vtxo(expire_at: i64, amount: Amount) -> Vtxo {
-        Vtxo {
+    fn vtxo(expire_at: i64, amount: Amount) -> VtxoOutPoint {
+        VtxoOutPoint {
             outpoint: None,
             spent: false,
             round_txid: "".to_string(),

@@ -1,42 +1,49 @@
 use crate::error::Error;
-use bitcoin::opcodes;
-use bitcoin::opcodes::all::OP_CSV;
-use bitcoin::opcodes::all::OP_VERIFY;
-use bitcoin::secp256k1;
-use bitcoin::taproot::LeafVersion;
-use bitcoin::taproot::TapLeaf;
+use bitcoin::opcodes::all::*;
+use bitcoin::taproot::TaprootSpendInfo;
 use bitcoin::ScriptBuf;
 use bitcoin::Sequence;
-use miniscript::ToPublicKey;
+use bitcoin::XOnlyPublicKey;
 
-pub struct CsvSigClosure {
-    pub pk: secp256k1::PublicKey,
-    pub timeout: i64,
+/// A conventional 2-of-2 multisignature [`ScriptBuf`].
+pub fn multisig_script(pk_0: XOnlyPublicKey, pk_1: XOnlyPublicKey) -> ScriptBuf {
+    bitcoin::ScriptBuf::builder()
+        .push_x_only_key(&pk_0)
+        .push_opcode(OP_CHECKSIGVERIFY)
+        .push_x_only_key(&pk_1)
+        .push_opcode(OP_CHECKSIG)
+        .into_script()
 }
 
-impl CsvSigClosure {
-    pub fn leaf(&self) -> TapLeaf {
-        let csv = bitcoin::Sequence::from_seconds_ceil(self.timeout as u32).unwrap();
-        let pk = self.pk.to_x_only_pubkey();
+/// A [`ScriptBuf`] allowing the owner of `pk` to spend after `locktime_seconds` have passed from
+/// the time the corresponding output was included in a block.
+pub fn csv_sig_script(locktime_seconds: u32, pk: XOnlyPublicKey) -> ScriptBuf {
+    let csv = bitcoin::Sequence::from_seconds_ceil(locktime_seconds).unwrap();
 
-        let script = bitcoin::ScriptBuf::builder()
-            .push_int(csv.to_consensus_u32() as i64)
-            .push_opcode(opcodes::all::OP_CSV)
-            .push_opcode(opcodes::all::OP_VERIFY)
-            .push_x_only_key(&pk)
-            .push_opcode(opcodes::all::OP_CHECKSIG)
-            .into_script();
-
-        TapLeaf::Script(script, LeafVersion::TapScript)
-    }
+    bitcoin::ScriptBuf::builder()
+        .push_int(csv.to_consensus_u32() as i64)
+        .push_opcode(OP_CSV)
+        .push_opcode(OP_DROP)
+        .push_x_only_key(&pk)
+        .push_opcode(OP_CHECKSIG)
+        .into_script()
 }
 
-// TODO: Convert into `CsvSigClosure::parse` function.
-pub fn extract_sequence_from_csv_sig_closure(script: &ScriptBuf) -> Result<Sequence, Error> {
+/// The script pubkey for the Taproot output corresponding to the given [`TaprootSpendInfo`].
+pub fn tr_script_pubkey(spend_info: &TaprootSpendInfo) -> ScriptBuf {
+    let output_key = spend_info.output_key();
+    let builder = bitcoin::blockdata::script::Builder::new();
+    builder
+        .push_opcode(OP_PUSHNUM_1)
+        .push_slice(output_key.serialize())
+        .into_script()
+}
+
+pub fn extract_sequence_from_csv_sig_script(script: &ScriptBuf) -> Result<Sequence, Error> {
     let csv_index = script
         .to_bytes()
         .windows(2)
-        .position(|window| *window == [OP_CSV.to_u8(), OP_VERIFY.to_u8()])
+        .position(|window| *window == [OP_CSV.to_u8(), OP_DROP.to_u8()])
         .unwrap();
 
     let before_csv = &script.to_bytes()[..csv_index];
@@ -68,29 +75,28 @@ pub fn extract_sequence_from_csv_sig_closure(script: &ScriptBuf) -> Result<Seque
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::locktime;
     use bitcoin::XOnlyPublicKey;
     use std::str::FromStr;
 
     #[test]
-    fn parse_csv_sig_closure() {
-        let timeout = 4820384;
-        let csv = bitcoin::Sequence::from_seconds_ceil(timeout).unwrap();
+    fn test_extract_sequence_from_csv_sig_script() {
+        // Equivalent to two 512-second intervals.
+        let locktime_seconds = 1024;
 
         let pk = XOnlyPublicKey::from_str(
             "18845781f631c48f1c9709e23092067d06837f30aa0cd0544ac887fe91ddd166",
         )
         .unwrap();
 
-        let script = bitcoin::ScriptBuf::builder()
-            .push_int(csv.to_consensus_u32() as i64)
-            .push_opcode(opcodes::all::OP_CSV)
-            .push_opcode(opcodes::all::OP_VERIFY)
-            .push_x_only_key(&pk)
-            .push_opcode(opcodes::all::OP_CHECKSIG)
-            .into_script();
+        let script = csv_sig_script(locktime_seconds, pk);
 
-        let parsed = extract_sequence_from_csv_sig_closure(&script).unwrap();
+        let parsed = extract_sequence_from_csv_sig_script(&script).unwrap();
+        let parsed = parsed.to_relative_lock_time();
 
-        assert_eq!(parsed.to_consensus_u32(), csv.to_consensus_u32());
+        assert_eq!(
+            parsed,
+            locktime::relative::LockTime::from_512_second_intervals(2).into()
+        );
     }
 }
