@@ -10,7 +10,9 @@ use bdk_wallet::Wallet as BdkWallet;
 use bitcoin::bip32::Xpriv;
 use bitcoin::key::Keypair;
 use bitcoin::key::Secp256k1;
+use bitcoin::secp256k1::schnorr::Signature;
 use bitcoin::secp256k1::All;
+use bitcoin::secp256k1::Message;
 use bitcoin::Address;
 use bitcoin::Network;
 use bitcoin::XOnlyPublicKey;
@@ -134,5 +136,18 @@ where
 
     fn get_boarding_addresses(&self) -> Result<Vec<BoardingOutput>, Error> {
         self.db.load_boarding_addresses()
+    }
+
+    fn sign_boarding_address(
+        &self,
+        boarding_address: &BoardingOutput,
+        msg: &Message,
+    ) -> Result<(Signature, XOnlyPublicKey), Error> {
+        let key = self.db.sk_for_boarding_address(boarding_address)?;
+        let sig = self
+            .secp
+            .sign_schnorr_no_aux_rand(msg, &key.keypair(&self.secp));
+        let pk = key.x_only_public_key(&self.secp).0;
+        Ok((sig, pk))
     }
 }

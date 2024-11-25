@@ -449,12 +449,6 @@ where
 
         tracing::debug!(payment_id, "Registered for round");
 
-        let boarding_inputs: Vec<_> = boarding_inputs
-            .clone()
-            .into_iter()
-            .map(|(outpoint, d)| (outpoint, d.forfeit_spend_info()))
-            .collect::<Vec<_>>();
-
         let mut outputs = vec![];
 
         match output_type {
@@ -797,9 +791,10 @@ where
                             // Sign round transaction inputs that belong to us. For every output we
                             // are boarding, we look through the round transaction inputs to find a
                             // matching input.
-                            for (boarding_outpoint, (forfeit_script, forfeit_control_block)) in
-                                boarding_inputs.iter()
-                            {
+                            for (boarding_outpoint, boarding_output) in boarding_inputs.iter() {
+                                let (forfeit_script, forfeit_control_block) =
+                                    boarding_output.forfeit_spend_info();
+
                                 for (i, input) in round_psbt.inputs.iter_mut().enumerate() {
                                     let previous_outpoint =
                                         round_psbt.unsigned_tx.input[i].previous_output;
@@ -817,7 +812,7 @@ where
                                         let prevouts = Prevouts::All(&prevouts);
 
                                         let leaf_hash =
-                                            TapLeafHash::from_script(forfeit_script, leaf_version);
+                                            TapLeafHash::from_script(&forfeit_script, leaf_version);
 
                                         let tap_sighash =
                                             SighashCache::new(&round_psbt.unsigned_tx)
@@ -833,9 +828,12 @@ where
                                             tap_sighash.to_raw_hash().to_byte_array(),
                                         );
 
-                                        let sig =
-                                            self.secp.sign_schnorr_no_aux_rand(&msg, &self.kp);
-                                        let pk = self.kp.x_only_public_key().0;
+                                        let (sig, pk) = {
+                                            let wallet = self.wallet.lock().await;
+                                            wallet
+                                                .sign_boarding_address(boarding_output, &msg)
+                                                .unwrap()
+                                        };
 
                                         if self.secp.verify_schnorr(&sig, &msg, &pk).is_err() {
                                             tracing::error!(

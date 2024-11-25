@@ -332,6 +332,21 @@ impl Persistence for InMemoryDb {
             .map(|(_, address)| address)
             .collect())
     }
+
+    fn sk_for_boarding_address(
+        &self,
+        boarding_address: &BoardingOutput,
+    ) -> Result<SecretKey, Error> {
+        let maybe_sk = self.boarding_outputs.iter().find_map(|(sk, b)| {
+            if b == boarding_address {
+                Some(*sk)
+            } else {
+                None
+            }
+        });
+        let secret_key = maybe_sk.unwrap();
+        Ok(secret_key)
+    }
 }
 
 async fn setup_client(

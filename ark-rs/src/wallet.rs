@@ -1,5 +1,7 @@
 use crate::boarding_output::BoardingOutput;
 use crate::error::Error;
+use bitcoin::secp256k1::schnorr::Signature;
+use bitcoin::secp256k1::Message;
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::Address;
 use bitcoin::Amount;
@@ -16,6 +18,12 @@ pub trait BoardingWallet {
     ) -> Result<BoardingOutput, Error>;
 
     fn get_boarding_addresses(&self) -> Result<Vec<BoardingOutput>, Error>;
+
+    fn sign_boarding_address(
+        &self,
+        boarding_address: &BoardingOutput,
+        msg: &Message,
+    ) -> Result<(Signature, XOnlyPublicKey), Error>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -45,4 +53,9 @@ pub trait Persistence {
         boarding_address: BoardingOutput,
     ) -> Result<(), Error>;
     fn load_boarding_addresses(&self) -> Result<Vec<BoardingOutput>, Error>;
+
+    fn sk_for_boarding_address(
+        &self,
+        boarding_address: &BoardingOutput,
+    ) -> Result<SecretKey, Error>;
 }
