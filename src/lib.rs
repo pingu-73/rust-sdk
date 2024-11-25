@@ -455,8 +455,6 @@ where
             .map(|(outpoint, d)| (outpoint, d.forfeit_spend_info()))
             .collect::<Vec<_>>();
 
-        let vtxo_inputs = vtxo_inputs.clone().into_iter().collect::<Vec<_>>();
-
         let mut outputs = vec![];
 
         match output_type {
