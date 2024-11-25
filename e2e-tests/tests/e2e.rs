@@ -1,7 +1,8 @@
 use ark_rs::boarding_output::BoardingOutput;
 use ark_rs::error::Error;
+use ark_rs::wallet::BoardingWallet;
+use ark_rs::wallet::OnchainWallet;
 use ark_rs::wallet::Persistence;
-use ark_rs::wallet::{BoardingWallet, OnchainWallet};
 use ark_rs::Blockchain;
 use ark_rs::Client;
 use bitcoin::hex::FromHex;
@@ -24,8 +25,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Once;
 use tokio::sync::Mutex;
-
-mod wallet;
 
 #[tokio::test]
 pub async fn e2e() {
@@ -341,11 +340,12 @@ async fn setup_client(
     nigiri: Arc<Nigiri>,
     secp: Secp256k1<All>,
 ) -> (
-    Client<Nigiri, wallet::Wallet<InMemoryDb>>,
-    Arc<Mutex<wallet::Wallet<InMemoryDb>>>,
+    Client<Nigiri, ark_bdk_wallet::Wallet<InMemoryDb>>,
+    Arc<Mutex<ark_bdk_wallet::Wallet<InMemoryDb>>>,
 ) {
     let db = InMemoryDb::default();
-    let wallet = wallet::Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db);
+    let wallet =
+        ark_bdk_wallet::Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db);
     let wallet = Arc::new(Mutex::new(wallet));
     let mut client = Client::new(name, kp, nigiri, wallet.clone());
 

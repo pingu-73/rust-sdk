@@ -1,8 +1,9 @@
 use ark_rs::boarding_output::BoardingOutput;
 use ark_rs::error::Error;
+use ark_rs::wallet::Balance;
 use ark_rs::wallet::BoardingWallet;
 use ark_rs::wallet::OnchainWallet;
-use ark_rs::wallet::{Balance, Persistence};
+use ark_rs::wallet::Persistence;
 use bdk_esplora::EsploraAsyncExt;
 use bdk_wallet::KeychainKind;
 use bdk_wallet::Wallet as BdkWallet;
