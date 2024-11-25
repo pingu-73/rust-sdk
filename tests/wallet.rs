@@ -1,8 +1,8 @@
 use ark_rs::boarding_output::BoardingOutput;
 use ark_rs::error::Error;
-use ark_rs::wallet::Balance;
 use ark_rs::wallet::BoardingWallet;
 use ark_rs::wallet::OnchainWallet;
+use ark_rs::wallet::{Balance, Persistence};
 use bdk_esplora::EsploraAsyncExt;
 use bdk_wallet::KeychainKind;
 use bdk_wallet::Wallet as BdkWallet;
@@ -16,15 +16,28 @@ use bitcoin::XOnlyPublicKey;
 use std::collections::BTreeSet;
 use std::io::Write;
 
-pub struct Wallet {
+pub struct Wallet<DB>
+where
+    DB: Persistence,
+{
     kp: Keypair,
     secp: Secp256k1<All>,
     inner: BdkWallet,
     client: esplora_client::AsyncClient,
+    db: DB,
 }
 
-impl Wallet {
-    pub fn new(kp: Keypair, secp: Secp256k1<All>, network: Network, esplora_url: &str) -> Self {
+impl<DB> Wallet<DB>
+where
+    DB: Persistence,
+{
+    pub fn new(
+        kp: Keypair,
+        secp: Secp256k1<All>,
+        network: Network,
+        esplora_url: &str,
+        db: DB,
+    ) -> Self {
         let key = kp.secret_key();
         let xprv = Xpriv::new_master(network, key.as_ref()).unwrap();
         let external = bdk_wallet::template::Bip84(xprv, KeychainKind::External);
@@ -43,11 +56,15 @@ impl Wallet {
             secp,
             inner: wallet,
             client,
+            db,
         }
     }
 }
 
-impl OnchainWallet for Wallet {
+impl<DB> OnchainWallet for Wallet<DB>
+where
+    DB: Persistence + Send,
+{
     fn get_onchain_address(&mut self) -> Result<Address, Error> {
         let info = self.inner.next_unused_address(KeychainKind::External);
 
@@ -86,15 +103,19 @@ impl OnchainWallet for Wallet {
     }
 }
 
-impl BoardingWallet for Wallet {
-    fn get_boarding_address(
-        &self,
+impl<DB> BoardingWallet for Wallet<DB>
+where
+    DB: Persistence,
+{
+    fn new_boarding_address(
+        &mut self,
         asp_pubkey: XOnlyPublicKey,
         exit_delay: u32,
         descriptor_template: String,
         network: Network,
     ) -> Result<BoardingOutput, Error> {
-        let (owner_pk, _) = self.kp.public_key().x_only_public_key();
+        let sk = self.kp.secret_key();
+        let (owner_pk, _) = sk.public_key(&self.secp).x_only_public_key();
 
         let address = BoardingOutput::new(
             &self.secp,
@@ -105,19 +126,12 @@ impl BoardingWallet for Wallet {
             network,
         )?;
 
+        self.db.save_boarding_address(sk, address.clone())?;
+
         Ok(address)
     }
 
-    fn get_boarding_addresses(
-        &self,
-        asp_pubkey: XOnlyPublicKey,
-        exit_delay: u32,
-        descriptor_template: String,
-        network: Network,
-    ) -> Result<Vec<BoardingOutput>, Error> {
-        // TODO: use separeate keychain or bdk keychain for this and track this address
-        let boarding_output =
-            self.get_boarding_address(asp_pubkey, exit_delay, descriptor_template, network)?;
-        Ok(vec![boarding_output])
+    fn get_boarding_addresses(&self) -> Result<Vec<BoardingOutput>, Error> {
+        self.db.load_boarding_addresses()
     }
 }

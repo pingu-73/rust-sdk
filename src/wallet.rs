@@ -1,26 +1,21 @@
 use crate::boarding_output::BoardingOutput;
 use crate::error::Error;
+use bitcoin::secp256k1::SecretKey;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::Network;
 use bitcoin::XOnlyPublicKey;
 
 pub trait BoardingWallet {
-    fn get_boarding_address(
-        &self,
+    fn new_boarding_address(
+        &mut self,
         asp_pubkey: XOnlyPublicKey,
         exit_delay: u32,
         descriptor_template: String,
         network: Network,
     ) -> Result<BoardingOutput, Error>;
 
-    fn get_boarding_addresses(
-        &self,
-        asp_pubkey: XOnlyPublicKey,
-        exit_delay: u32,
-        descriptor_template: String,
-        network: Network,
-    ) -> Result<Vec<BoardingOutput>, Error>;
+    fn get_boarding_addresses(&self) -> Result<Vec<BoardingOutput>, Error>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -41,4 +36,13 @@ pub trait OnchainWallet {
     fn sync(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send;
 
     fn balance(&self) -> Result<Balance, Error>;
+}
+
+pub trait Persistence {
+    fn save_boarding_address(
+        &mut self,
+        sk: SecretKey,
+        boarding_address: BoardingOutput,
+    ) -> Result<(), Error>;
+    fn load_boarding_addresses(&self) -> Result<Vec<BoardingOutput>, Error>;
 }

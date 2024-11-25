@@ -53,8 +53,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tonic::codegen::tokio_stream::StreamExt;
 use zkp::new_musig_nonce_pair;
 use zkp::MusigAggNonce;
@@ -363,19 +363,9 @@ where
         Error,
     > {
         // Get all known boarding addresses.
-        let asp_info = self.asp_info.clone().unwrap();
-        let asp_pk: PublicKey = asp_info.pubkey.parse().unwrap();
-        let (asp_pk, _) = asp_pk.inner.x_only_public_key();
         let boarding_addresses = {
-            let wallet = self.wallet.lock().unwrap();
-            wallet
-                .get_boarding_addresses(
-                    asp_pk,
-                    asp_info.round_lifetime as u32,
-                    asp_info.boarding_descriptor_template,
-                    asp_info.network,
-                )
-                .unwrap()
+            let wallet = self.wallet.lock().await;
+            wallet.get_boarding_addresses().unwrap()
         };
 
         let mut boarding_inputs: Vec<(OutPoint, boarding_output::BoardingOutput)> = Vec::new();
