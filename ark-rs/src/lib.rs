@@ -18,9 +18,7 @@ use crate::wallet::BoardingWallet;
 use crate::wallet::OnchainWallet;
 use base64::Engine;
 use bitcoin::absolute::LockTime;
-use bitcoin::consensus::deserialize;
 use bitcoin::hashes::Hash;
-use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
@@ -696,19 +694,27 @@ where
                                             .clone()
                                     } else {
                                         let parent_level = &vtxo_tree.levels[i - 1];
-                                        let parent_tx: Transaction = parent_level
+                                        let parent_tx: Psbt = parent_level
                                             .nodes
                                             .iter()
                                             .find_map(|node| {
                                                 let txid: Txid = node.txid.parse().unwrap();
                                                 (txid == parent_txid).then_some({
-                                                    let tx = Vec::from_hex(&node.tx).unwrap();
-                                                    deserialize(&tx).unwrap()
+                                                    let base64 = base64::engine::GeneralPurpose::new(
+                                                        &base64::alphabet::STANDARD,
+                                                        base64::engine::GeneralPurposeConfig::new(),
+                                                    );
+
+                                                    {
+                                                        let psbt = base64.decode(&node.tx).unwrap();
+
+                                                        Psbt::deserialize(&psbt).unwrap()
+                                                    }
                                                 })
                                             })
                                             .unwrap();
 
-                                        parent_tx.output[input_vout].clone()
+                                        parent_tx.unsigned_tx.output[input_vout].clone()
                                     };
 
                                     let prevouts = [prevout];
