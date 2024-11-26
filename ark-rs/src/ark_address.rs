@@ -28,10 +28,11 @@ impl ArkAddress {
     }
 
     pub fn decode(value: &str) -> Result<Self, Error> {
-        let (hrp, bytes) = bech32::decode(value).unwrap();
+        let (hrp, bytes) = bech32::decode(value).map_err(Error::parse_ark_address)?;
 
-        let asp = XOnlyPublicKey::from_slice(&bytes[..32]).unwrap();
-        let vtxo_tap_key = XOnlyPublicKey::from_slice(&bytes[32..]).unwrap();
+        let asp = XOnlyPublicKey::from_slice(&bytes[..32]).map_err(Error::parse_ark_address)?;
+        let vtxo_tap_key =
+            XOnlyPublicKey::from_slice(&bytes[32..]).map_err(Error::parse_ark_address)?;
 
         Ok(Self {
             hrp,
@@ -40,15 +41,13 @@ impl ArkAddress {
         })
     }
 
-    pub fn encode(&self) -> Result<String, Error> {
+    pub fn encode(&self) -> String {
         let mut bytes = [0u8; 64];
 
         bytes[..32].copy_from_slice(&self.asp.serialize());
         bytes[32..].copy_from_slice(&self.vtxo_tap_key.serialize());
 
-        let s = bech32::encode::<Bech32m>(self.hrp, bytes.as_slice()).unwrap();
-
-        Ok(s)
+        bech32::encode::<Bech32m>(self.hrp, bytes.as_slice()).expect("data can be encoded")
     }
 }
 
@@ -79,7 +78,7 @@ mod tests {
             "25a43cecfa0e1b1a4f72d64ad15f4cfa7a84d0723e8511c969aa543638ea9967"
         );
 
-        let encoded = decoded.encode().unwrap();
+        let encoded = decoded.encode();
 
         assert_eq!(encoded, address);
     }

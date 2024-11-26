@@ -1,6 +1,9 @@
-use bitcoin::opcodes::all::*;
+use crate::script::csv_sig_script;
+use bitcoin::key::Secp256k1;
+use bitcoin::secp256k1::All;
 use bitcoin::taproot::LeafVersion;
-use bitcoin::taproot::TapLeaf;
+use bitcoin::taproot::TaprootBuilder;
+use bitcoin::taproot::TaprootSpendInfo;
 use bitcoin::ScriptBuf;
 use bitcoin::XOnlyPublicKey;
 
@@ -13,29 +16,21 @@ pub struct VtxoTreeInternalNodeScript {
 }
 
 impl VtxoTreeInternalNodeScript {
-    pub fn new(round_lifetime_seconds: u32, asp: XOnlyPublicKey) -> Self {
-        let csv = bitcoin::Sequence::from_seconds_ceil(round_lifetime_seconds).unwrap();
-
-        let script = bitcoin::ScriptBuf::builder()
-            .push_int(csv.to_consensus_u32() as i64)
-            .push_opcode(OP_CSV)
-            .push_opcode(OP_DROP)
-            .push_x_only_key(&asp)
-            .push_opcode(OP_CHECKSIG)
-            .into_script();
+    pub fn new(round_lifetime: bitcoin::Sequence, asp: XOnlyPublicKey) -> Self {
+        let script = csv_sig_script(round_lifetime, asp);
 
         Self { script }
     }
 
-    /// Construct a [`TapLeaf`] based on the script of the internal node.
-    ///
-    /// # Clarification
-    ///
-    /// There are two completely different trees at play here:
-    ///
-    /// - The VTXO tree.
-    /// - The Taproot tree of the internal node of the VTXO tree.
-    pub fn leaf(&self) -> TapLeaf {
-        TapLeaf::Script(self.script.clone(), LeafVersion::TapScript)
+    pub fn sweep_spend_leaf(
+        &self,
+        secp: &Secp256k1<All>,
+        aggregate_pk: XOnlyPublicKey,
+    ) -> TaprootSpendInfo {
+        TaprootBuilder::new()
+            .add_leaf_with_ver(0, self.script.clone(), LeafVersion::TapScript)
+            .expect("valid sweep leaf")
+            .finalize(secp, aggregate_pk)
+            .expect("can be finalized")
     }
 }

@@ -50,7 +50,9 @@ pub fn coin_select(
     }
 
     if selected_amount < amount {
-        return Err(Error::Unknown);
+        return Err(Error::coin_select(format!(
+            "insufficient funds: selected = {selected_amount}, needed = {amount}"
+        )));
     }
 
     let mut change = selected_amount - amount;

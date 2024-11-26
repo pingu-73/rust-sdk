@@ -1,13 +1,12 @@
-use crate::error::Error;
 use bitcoin::opcodes::all::*;
 use bitcoin::taproot::TaprootSpendInfo;
 use bitcoin::ScriptBuf;
-use bitcoin::Sequence;
 use bitcoin::XOnlyPublicKey;
+use std::fmt;
 
 /// A conventional 2-of-2 multisignature [`ScriptBuf`].
 pub fn multisig_script(pk_0: XOnlyPublicKey, pk_1: XOnlyPublicKey) -> ScriptBuf {
-    bitcoin::ScriptBuf::builder()
+    ScriptBuf::builder()
         .push_x_only_key(&pk_0)
         .push_opcode(OP_CHECKSIGVERIFY)
         .push_x_only_key(&pk_1)
@@ -17,11 +16,9 @@ pub fn multisig_script(pk_0: XOnlyPublicKey, pk_1: XOnlyPublicKey) -> ScriptBuf 
 
 /// A [`ScriptBuf`] allowing the owner of `pk` to spend after `locktime_seconds` have passed from
 /// the time the corresponding output was included in a block.
-pub fn csv_sig_script(locktime_seconds: u32, pk: XOnlyPublicKey) -> ScriptBuf {
-    let csv = bitcoin::Sequence::from_seconds_ceil(locktime_seconds).unwrap();
-
-    bitcoin::ScriptBuf::builder()
-        .push_int(csv.to_consensus_u32() as i64)
+pub fn csv_sig_script(locktime: bitcoin::Sequence, pk: XOnlyPublicKey) -> ScriptBuf {
+    ScriptBuf::builder()
+        .push_int(locktime.to_consensus_u32() as i64)
         .push_opcode(OP_CSV)
         .push_opcode(OP_DROP)
         .push_x_only_key(&pk)
@@ -39,12 +36,14 @@ pub fn tr_script_pubkey(spend_info: &TaprootSpendInfo) -> ScriptBuf {
         .into_script()
 }
 
-pub fn extract_sequence_from_csv_sig_script(script: &ScriptBuf) -> Result<Sequence, Error> {
+pub fn extract_sequence_from_csv_sig_script(
+    script: &ScriptBuf,
+) -> Result<bitcoin::Sequence, InvalidCsvSigScriptError> {
     let csv_index = script
         .to_bytes()
         .windows(2)
         .position(|window| *window == [OP_CSV.to_u8(), OP_DROP.to_u8()])
-        .unwrap();
+        .ok_or(InvalidCsvSigScriptError)?;
 
     let before_csv = &script.to_bytes()[..csv_index];
 
@@ -67,10 +66,21 @@ pub fn extract_sequence_from_csv_sig_script(script: &ScriptBuf) -> Result<Sequen
 
     let sequence = u32::from_be_bytes(buffer);
 
-    let sequence = Sequence::from_consensus(sequence);
+    let sequence = bitcoin::Sequence::from_consensus(sequence);
 
     Ok(sequence)
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidCsvSigScriptError;
+
+impl fmt::Display for InvalidCsvSigScriptError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("invalid CSV-Sig script")
+    }
+}
+
+impl std::error::Error for InvalidCsvSigScriptError {}
 
 #[cfg(test)]
 mod tests {
@@ -83,13 +93,14 @@ mod tests {
     fn test_extract_sequence_from_csv_sig_script() {
         // Equivalent to two 512-second intervals.
         let locktime_seconds = 1024;
+        let sequence = bitcoin::Sequence::from_seconds_ceil(locktime_seconds).unwrap();
 
         let pk = XOnlyPublicKey::from_str(
             "18845781f631c48f1c9709e23092067d06837f30aa0cd0544ac887fe91ddd166",
         )
         .unwrap();
 
-        let script = csv_sig_script(locktime_seconds, pk);
+        let script = csv_sig_script(sequence, pk);
 
         let parsed = extract_sequence_from_csv_sig_script(&script).unwrap();
         let parsed = parsed.to_relative_lock_time();

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use ark_bdk_wallet::Wallet;
 use ark_rs::boarding_output::BoardingOutput;
 use ark_rs::error::Error;
@@ -5,9 +7,9 @@ use ark_rs::wallet::BoardingWallet;
 use ark_rs::wallet::Persistence;
 use ark_rs::Blockchain;
 use ark_rs::Client;
+use ark_rs::OfflineClient;
 use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
-use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::All;
 use bitcoin::secp256k1::SecretKey;
@@ -116,7 +118,7 @@ pub async fn multi_party_e2e() {
     tracing::debug!("Post boarding: Bob offchain balance: {bob_offchain_balance}");
     tracing::debug!("Post boarding: Claire offchain balance: {claire_offchain_balance}");
 
-    let (bob_offchain_address, _) = bob.get_offchain_address().unwrap();
+    let (bob_offchain_address, _) = bob.get_offchain_address();
     let amount = Amount::from_sat(100_000);
 
     bob.list_vtxos().await.unwrap();
@@ -148,23 +150,23 @@ async fn new_boarding_address(
     client: &Client<Nigiri, Wallet<InMemoryDb>>,
     alice_wallet: &Arc<Mutex<Wallet<InMemoryDb>>>,
 ) -> BoardingOutput {
-    let alice_asp_info = client.asp_info.clone().unwrap();
-    let asp_pk: PublicKey = alice_asp_info.pubkey.parse().unwrap();
+    let alice_asp_info = client.asp_info.clone();
+    let asp_pk = alice_asp_info.pk;
     let (asp_pk, _) = asp_pk.inner.x_only_public_key();
 
     let mut wallet = alice_wallet.lock().await;
     wallet
         .new_boarding_address(
             asp_pk,
-            alice_asp_info.round_lifetime as u32,
-            alice_asp_info.boarding_descriptor_template,
+            alice_asp_info.round_lifetime,
+            &alice_asp_info.boarding_descriptor_template,
             alice_asp_info.network,
         )
         .unwrap()
 }
 
 struct Nigiri {
-    utxos: Mutex<HashMap<bitcoin::Address, (OutPoint, Amount)>>,
+    utxos: Mutex<HashMap<Address, (OutPoint, Amount)>>,
     esplora_client: esplora_client::BlockingClient,
 }
 
@@ -329,16 +331,16 @@ async fn setup_client(
     nigiri: Arc<Nigiri>,
     secp: Secp256k1<All>,
 ) -> (
-    Client<Nigiri, ark_bdk_wallet::Wallet<InMemoryDb>>,
-    Arc<Mutex<ark_bdk_wallet::Wallet<InMemoryDb>>>,
+    Client<Nigiri, Wallet<InMemoryDb>>,
+    Arc<Mutex<Wallet<InMemoryDb>>>,
 ) {
     let db = InMemoryDb::default();
-    let wallet =
-        ark_bdk_wallet::Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db);
+    let wallet = Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db);
     let wallet = Arc::new(Mutex::new(wallet));
-    let mut client = Client::new(name, kp, nigiri, wallet.clone());
-
-    client.connect().await.unwrap();
+    let client = OfflineClient::new(name, kp, nigiri, wallet.clone())
+        .connect()
+        .await
+        .unwrap();
 
     (client, wallet)
 }
