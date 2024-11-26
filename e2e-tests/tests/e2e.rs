@@ -1,12 +1,19 @@
+use ark_rs::boarding_output::BoardingOutput;
 use ark_rs::error::Error;
+use ark_rs::wallet::BoardingWallet;
+use ark_rs::wallet::OnchainWallet;
+use ark_rs::wallet::Persistence;
 use ark_rs::Blockchain;
 use ark_rs::Client;
 use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
+use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
+use bitcoin::secp256k1::All;
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::Address;
 use bitcoin::Amount;
+use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Transaction;
 use bitcoin::Txid;
@@ -16,8 +23,8 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::Once;
+use tokio::sync::Mutex;
 
 #[tokio::test]
 pub async fn e2e() {
@@ -30,9 +37,29 @@ pub async fn e2e() {
     let alice_key = SecretKey::new(&mut rng);
     let alice_keypair = Keypair::from_secret_key(&secp, &alice_key);
 
-    let alice = setup_client("alice".to_string(), alice_keypair, nigiri.clone()).await;
+    let (alice, alice_wallet) = setup_client(
+        "alice".to_string(),
+        alice_keypair,
+        nigiri.clone(),
+        secp.clone(),
+    )
+    .await;
 
-    let alice_boarding_address = alice.get_boarding_address().unwrap();
+    let alice_boarding_address = {
+        let alice_asp_info = alice.asp_info.clone().unwrap();
+        let asp_pk: PublicKey = alice_asp_info.pubkey.parse().unwrap();
+        let (asp_pk, _) = asp_pk.inner.x_only_public_key();
+
+        let mut wallet = alice_wallet.lock().await;
+        wallet
+            .new_boarding_address(
+                asp_pk,
+                alice_asp_info.round_lifetime as u32,
+                alice_asp_info.boarding_descriptor_template,
+                alice_asp_info.network,
+            )
+            .unwrap()
+    };
 
     let boarding_output = nigiri
         .faucet_fund(alice_boarding_address.address(), Amount::ONE_BTC)
@@ -52,7 +79,8 @@ pub async fn e2e() {
     let bob_key = SecretKey::new(&mut rng);
     let bob_keypair = Keypair::from_secret_key(&secp, &bob_key);
 
-    let bob = setup_client("bob".to_string(), bob_keypair, nigiri.clone()).await;
+    let (bob, _bob_wallet) =
+        setup_client("bob".to_string(), bob_keypair, nigiri.clone(), secp).await;
 
     let bob_offchain_balance = bob.offchain_balance().await.unwrap();
     let bob_vtxos = bob.list_vtxos().await.unwrap();
@@ -90,7 +118,17 @@ pub async fn e2e() {
         "Post settlement: Bob offchain balance: {bob_offchain_balance}"
     );
 
-    let onchain_address = alice.get_onchain_address().unwrap();
+    let onchain_address = {
+        let mut wallet = alice_wallet.lock().await;
+        wallet.get_onchain_address().unwrap()
+    };
+
+    let balance = {
+        // sync the wallet
+        let mut wallet = alice_wallet.lock().await;
+        wallet.sync().await.unwrap();
+        wallet.balance().unwrap()
+    };
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
     let alice_vtxos = alice.list_vtxos().await.unwrap();
@@ -98,12 +136,20 @@ pub async fn e2e() {
         ?alice_vtxos,
         "Pre off-boarding: Alice offchain balance: {alice_offchain_balance}"
     );
+    tracing::debug!(?balance, "Pre off-boarding: Alice onchain balance");
     let txid = alice
         .off_board(&mut rng, onchain_address, Amount::ONE_BTC / 5)
         .await
         .unwrap();
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    let balance = {
+        // sync the wallet
+        let mut wallet = alice_wallet.lock().await;
+        wallet.sync().await.unwrap();
+        wallet.balance().unwrap()
+    };
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
     let alice_vtxos = alice.list_vtxos().await.unwrap();
@@ -112,6 +158,7 @@ pub async fn e2e() {
         ?alice_vtxos,
         "Post off-boarding: Alice offchain balance: {alice_offchain_balance}"
     );
+    tracing::debug!(?balance, "Post off-boarding: Alice onchain balance");
 
     tracing::debug!(
         ?alice_vtxos,
@@ -202,7 +249,7 @@ impl Nigiri {
             txid,
             vout: vout as u32,
         };
-        let mut guard = self.utxos.lock().unwrap();
+        let mut guard = self.utxos.lock().await;
         guard.insert(address.clone(), (point, amount));
 
         point
@@ -223,7 +270,7 @@ impl Nigiri {
 
 impl Blockchain for Nigiri {
     async fn find_outpoint(&self, address: &Address) -> Result<Option<(OutPoint, Amount)>, Error> {
-        let guard = self.utxos.lock().unwrap();
+        let guard = self.utxos.lock().await;
         let value = guard.get(address);
         if let Some((outpoint, _amount)) = value {
             let option = self
@@ -262,12 +309,64 @@ impl Blockchain for Nigiri {
     }
 }
 
-async fn setup_client(name: String, kp: Keypair, nigiri: Arc<Nigiri>) -> Client<Nigiri> {
-    let mut client = Client::new(name, kp, nigiri);
+#[derive(Default)]
+pub struct InMemoryDb {
+    boarding_outputs: Vec<(SecretKey, BoardingOutput)>,
+}
+
+impl Persistence for InMemoryDb {
+    fn save_boarding_address(
+        &mut self,
+        sk: SecretKey,
+        boarding_address: BoardingOutput,
+    ) -> Result<(), Error> {
+        self.boarding_outputs.push((sk, boarding_address));
+        Ok(())
+    }
+
+    fn load_boarding_addresses(&self) -> Result<Vec<BoardingOutput>, Error> {
+        Ok(self
+            .boarding_outputs
+            .clone()
+            .into_iter()
+            .map(|(_, address)| address)
+            .collect())
+    }
+
+    fn sk_for_boarding_address(
+        &self,
+        boarding_address: &BoardingOutput,
+    ) -> Result<SecretKey, Error> {
+        let maybe_sk = self.boarding_outputs.iter().find_map(|(sk, b)| {
+            if b == boarding_address {
+                Some(*sk)
+            } else {
+                None
+            }
+        });
+        let secret_key = maybe_sk.unwrap();
+        Ok(secret_key)
+    }
+}
+
+async fn setup_client(
+    name: String,
+    kp: Keypair,
+    nigiri: Arc<Nigiri>,
+    secp: Secp256k1<All>,
+) -> (
+    Client<Nigiri, ark_bdk_wallet::Wallet<InMemoryDb>>,
+    Arc<Mutex<ark_bdk_wallet::Wallet<InMemoryDb>>>,
+) {
+    let db = InMemoryDb::default();
+    let wallet =
+        ark_bdk_wallet::Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db);
+    let wallet = Arc::new(Mutex::new(wallet));
+    let mut client = Client::new(name, kp, nigiri, wallet.clone());
 
     client.connect().await.unwrap();
 
-    client
+    (client, wallet)
 }
 
 pub fn init_tracing() {

@@ -7,7 +7,6 @@ use crate::asp::RoundOutputs;
 use crate::asp::RoundStreamEvent;
 use crate::asp::Tree;
 use crate::asp::VtxoOutPoint;
-use crate::boarding_output::BoardingOutput;
 use crate::coinselect::coin_select;
 use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
@@ -15,6 +14,8 @@ use crate::default_vtxo::DefaultVtxo;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::internal_node::VtxoTreeInternalNodeScript;
 use crate::script::extract_sequence_from_csv_sig_script;
+use crate::wallet::BoardingWallet;
+use crate::wallet::OnchainWallet;
 use base64::Engine;
 use bitcoin::absolute::LockTime;
 use bitcoin::consensus::deserialize;
@@ -53,6 +54,7 @@ use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tonic::codegen::tokio_stream::StreamExt;
 use zkp::new_musig_nonce_pair;
 use zkp::MusigAggNonce;
@@ -86,6 +88,7 @@ mod forfeit_fee;
 mod internal_node;
 mod script;
 mod tree;
+pub mod wallet;
 
 // TODO: Figure out how to integrate on-chain wallet. Probably use a trait and implement using
 // `bdk`.
@@ -94,7 +97,7 @@ const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d
 
 const VTXO_INPUT_INDEX: usize = 0;
 
-pub struct Client<B> {
+pub struct Client<B, W> {
     inner: asp::Client,
     pub name: String,
     pub kp: Keypair,
@@ -102,6 +105,7 @@ pub struct Client<B> {
     blockchain: Arc<B>,
     secp: Secp256k1<All>,
     secp_zkp: zkp::Secp256k1<zkp::All>,
+    wallet: Arc<Mutex<W>>,
 }
 
 enum RoundOutputType {
@@ -140,11 +144,12 @@ struct RedeemBranch {
     _lifetime: Duration,
 }
 
-impl<B> Client<B>
+impl<B, W> Client<B, W>
 where
     B: Blockchain,
+    W: BoardingWallet + OnchainWallet,
 {
-    pub fn new(name: String, kp: Keypair, blockchain: Arc<B>) -> Self {
+    pub fn new(name: String, kp: Keypair, blockchain: Arc<B>, wallet: Arc<Mutex<W>>) -> Self {
         let secp = Secp256k1::new();
         let secp_zkp = zkp::Secp256k1::new();
 
@@ -158,6 +163,7 @@ where
             blockchain,
             secp,
             secp_zkp,
+            wallet,
         }
     }
 
@@ -193,44 +199,6 @@ where
     pub fn get_offchain_addresses(&self) -> Result<Vec<(ArkAddress, DefaultVtxo)>, Error> {
         let address = self.get_offchain_address().unwrap();
 
-        Ok(vec![address])
-    }
-
-    pub fn get_onchain_address(&self) -> Result<Address, Error> {
-        let pk = self.kp.public_key();
-        let info = self.asp_info.clone().unwrap();
-        let pk = bitcoin::key::CompressedPublicKey(pk);
-        let address = Address::p2wpkh(&pk, info.network);
-
-        Ok(address)
-    }
-
-    pub fn get_boarding_address(&self) -> Result<BoardingOutput, Error> {
-        let asp_info = self.asp_info.clone().unwrap();
-
-        let asp_pk: PublicKey = asp_info.pubkey.parse().unwrap();
-        let (asp_pk, _) = asp_pk.inner.x_only_public_key();
-
-        let (owner_pk, _) = self.kp.public_key().x_only_public_key();
-
-        let exit_delay = asp_info.round_lifetime as u32;
-
-        let network = asp_info.network;
-
-        let address = BoardingOutput::new(
-            &self.secp,
-            asp_pk,
-            owner_pk,
-            asp_info.boarding_descriptor_template,
-            exit_delay,
-            network,
-        )?;
-
-        Ok(address)
-    }
-
-    pub fn get_boarding_addresses(&self) -> Result<Vec<boarding_output::BoardingOutput>, Error> {
-        let address = self.get_boarding_address()?;
         Ok(vec![address])
     }
 
@@ -395,7 +363,10 @@ where
         Error,
     > {
         // Get all known boarding addresses.
-        let boarding_addresses = self.get_boarding_addresses().unwrap();
+        let boarding_addresses = {
+            let wallet = self.wallet.lock().await;
+            wallet.get_boarding_addresses().unwrap()
+        };
 
         let mut boarding_inputs: Vec<(OutPoint, boarding_output::BoardingOutput)> = Vec::new();
         let mut total_amount = Amount::ZERO;
@@ -477,14 +448,6 @@ where
             .await?;
 
         tracing::debug!(payment_id, "Registered for round");
-
-        let boarding_inputs: Vec<_> = boarding_inputs
-            .clone()
-            .into_iter()
-            .map(|(outpoint, d)| (outpoint, d.forfeit_spend_info()))
-            .collect::<Vec<_>>();
-
-        let vtxo_inputs = vtxo_inputs.clone().into_iter().collect::<Vec<_>>();
 
         let mut outputs = vec![];
 
@@ -828,9 +791,10 @@ where
                             // Sign round transaction inputs that belong to us. For every output we
                             // are boarding, we look through the round transaction inputs to find a
                             // matching input.
-                            for (boarding_outpoint, (forfeit_script, forfeit_control_block)) in
-                                boarding_inputs.iter()
-                            {
+                            for (boarding_outpoint, boarding_output) in boarding_inputs.iter() {
+                                let (forfeit_script, forfeit_control_block) =
+                                    boarding_output.forfeit_spend_info();
+
                                 for (i, input) in round_psbt.inputs.iter_mut().enumerate() {
                                     let previous_outpoint =
                                         round_psbt.unsigned_tx.input[i].previous_output;
@@ -848,7 +812,7 @@ where
                                         let prevouts = Prevouts::All(&prevouts);
 
                                         let leaf_hash =
-                                            TapLeafHash::from_script(forfeit_script, leaf_version);
+                                            TapLeafHash::from_script(&forfeit_script, leaf_version);
 
                                         let tap_sighash =
                                             SighashCache::new(&round_psbt.unsigned_tx)
@@ -864,9 +828,12 @@ where
                                             tap_sighash.to_raw_hash().to_byte_array(),
                                         );
 
-                                        let sig =
-                                            self.secp.sign_schnorr_no_aux_rand(&msg, &self.kp);
-                                        let pk = self.kp.x_only_public_key().0;
+                                        let (sig, pk) = {
+                                            let wallet = self.wallet.lock().await;
+                                            wallet
+                                                .sign_boarding_address(boarding_output, &msg)
+                                                .unwrap()
+                                        };
 
                                         if self.secp.verify_schnorr(&sig, &msg, &pk).is_err() {
                                             tracing::error!(

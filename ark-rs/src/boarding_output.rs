@@ -15,7 +15,7 @@ use bitcoin::Network;
 use bitcoin::ScriptBuf;
 use bitcoin::XOnlyPublicKey;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BoardingOutput {
     asp: XOnlyPublicKey,
     owner: XOnlyPublicKey,
