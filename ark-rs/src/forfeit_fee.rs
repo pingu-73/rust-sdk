@@ -1,5 +1,4 @@
 use crate::default_vtxo::DefaultVtxo;
-use crate::error::Error;
 use bitcoin::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::Address;
 use bitcoin::AddressType;
@@ -11,7 +10,7 @@ pub fn compute_forfeit_min_relay_fee(
     fee_rate_sats_per_kvb: u64,
     vtxo: &DefaultVtxo,
     forfeit_address: Address,
-) -> Result<Amount, Error> {
+) -> Amount {
     const INPUT_SIZE: u64 = 32 + 4 + 1 + 4;
     const P2PKH_SCRIPT_SIG_SIZE: u64 = 1 + 73 + 1 + 33;
     const FORFEIT_LEAF_WITNESS_SIZE: u64 = 64 * 2; // 2 signatures for multisig.
@@ -102,7 +101,5 @@ pub fn compute_forfeit_min_relay_fee(
     // 1012 sat/kvb == 1012/4 sat/kwu
     let fee_rate = FeeRate::from_sat_per_kwu(fee_rate_sats_per_kvb / 4);
 
-    let fee = fee_rate.fee_vb(weight_vb.ceil() as u64).expect("amount");
-
-    Ok(fee)
+    fee_rate.fee_vb(weight_vb.ceil() as u64).expect("amount")
 }

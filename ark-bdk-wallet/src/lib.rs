@@ -1,3 +1,6 @@
+#![allow(clippy::print_stdout)]
+#![allow(clippy::unwrap_used)]
+
 use ark_rs::boarding_output::BoardingOutput;
 use ark_rs::error::Error;
 use ark_rs::wallet::Balance;
@@ -113,8 +116,8 @@ where
     fn new_boarding_address(
         &mut self,
         asp_pubkey: XOnlyPublicKey,
-        exit_delay: u32,
-        descriptor_template: String,
+        exit_delay: bitcoin::Sequence,
+        descriptor_template: &str,
         network: Network,
     ) -> Result<BoardingOutput, Error> {
         let sk = self.kp.secret_key();
@@ -127,7 +130,7 @@ where
             descriptor_template,
             exit_delay,
             network,
-        )?;
+        );
 
         self.db.save_boarding_address(sk, address.clone())?;
 

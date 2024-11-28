@@ -1,6 +1,6 @@
 // TODO: Find a better name for this module.
 
-use crate::error::Error;
+use crate::asp::Error;
 use bitcoin::hex::FromHex;
 use std::io;
 use std::io::Cursor;
@@ -34,9 +34,9 @@ pub trait FromCursor {
 impl FromCursor for MusigPubNonce {
     fn from_cursor(cursor: &mut Cursor<&Vec<u8>>) -> Result<Self, Error> {
         let mut buffer = [0u8; 66];
-        cursor.read_exact(&mut buffer).unwrap();
+        cursor.read_exact(&mut buffer).map_err(Error::conversion)?;
 
-        MusigPubNonce::from_slice(&buffer).map_err(|_| Error::Unknown)
+        MusigPubNonce::from_slice(&buffer).map_err(Error::conversion)
     }
 }
 
@@ -62,15 +62,15 @@ where
     Ok(buf)
 }
 
-pub fn decode_tree<T>(serialized: String) -> io::Result<Vec<Vec<T>>>
+pub fn decode_tree<T>(serialized: String) -> Result<Vec<Vec<T>>, Error>
 where
     T: FromCursor,
 {
-    let bytes = Vec::from_hex(&serialized).unwrap();
+    let bytes = Vec::from_hex(&serialized).map_err(Error::conversion)?;
     let mut cursor = Cursor::new(&bytes);
 
     let mut n_rows = [0u8; 4];
-    cursor.read_exact(&mut n_rows)?;
+    cursor.read_exact(&mut n_rows).map_err(Error::conversion)?;
 
     let n_rows = u32::from_le_bytes(n_rows);
 
@@ -79,14 +79,16 @@ where
     // n_rows=3 n_columns=1 key0 n_columns=2 key1 key2 n_columns=4 key3 key4 key5 key6
     for _ in 0..n_rows {
         let mut n_columns = [0u8; 4];
-        cursor.read_exact(&mut n_columns)?;
+        cursor
+            .read_exact(&mut n_columns)
+            .map_err(Error::conversion)?;
 
         let n_columns = u32::from_le_bytes(n_columns);
 
         let mut row = Vec::with_capacity(n_columns as usize);
 
         for _ in 0..n_columns {
-            let pk = T::from_cursor(&mut cursor).unwrap();
+            let pk = T::from_cursor(&mut cursor)?;
             row.push(pk);
         }
 

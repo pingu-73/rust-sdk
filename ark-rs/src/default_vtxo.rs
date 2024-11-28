@@ -1,4 +1,3 @@
-use crate::error::Error;
 use crate::script::csv_sig_script;
 use crate::script::multisig_script;
 use crate::script::tr_script_pubkey;
@@ -6,6 +5,7 @@ use crate::UNSPENDABLE_KEY;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
 use bitcoin::key::Verification;
+use bitcoin::relative::LockTime;
 use bitcoin::taproot;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
@@ -33,13 +33,13 @@ impl DefaultVtxo {
         secp: &Secp256k1<C>,
         asp: XOnlyPublicKey,
         owner: XOnlyPublicKey,
-        exit_delay: u32,
+        exit_delay: bitcoin::Sequence,
         network: Network,
-    ) -> Result<Self, Error>
+    ) -> Self
     where
         C: Verification,
     {
-        let unspendable_key: PublicKey = UNSPENDABLE_KEY.parse().unwrap();
+        let unspendable_key: PublicKey = UNSPENDABLE_KEY.parse().expect("valid key");
         let (unspendable_key, _) = unspendable_key.inner.x_only_public_key();
 
         let forfeit_script = multisig_script(asp, owner);
@@ -48,28 +48,32 @@ impl DefaultVtxo {
         // TODO: Order of leaves could be wrong now.
         let spend_info = TaprootBuilder::new()
             .add_leaf(1, forfeit_script)
-            .unwrap()
+            .expect("valid forfeit leaf")
             .add_leaf(1, redeem_script)
-            .unwrap()
+            .expect("valid redeem leaf")
             .finalize(secp, unspendable_key)
-            .unwrap();
+            .expect("can be finalized");
 
+        let exit_delay_seconds = match exit_delay.to_relative_lock_time() {
+            Some(LockTime::Time(time)) => time.value() * 512,
+            _ => unreachable!("default VTXO redeem script must use relative lock time in seconds"),
+        };
         let ark_descriptor = DEFAULT_VTXO_DESCRIPTOR_TEMPLATE
             .replace("UNSPENDABLE_KEY", unspendable_key.to_string().as_str())
             .replace("USER", owner.to_string().as_str())
             .replace("ASP", asp.to_string().as_str())
-            .replace("TIMEOUT", exit_delay.to_string().as_str());
+            .replace("TIMEOUT", exit_delay_seconds.to_string().as_str());
 
         let script_pubkey = tr_script_pubkey(&spend_info);
-        let address = Address::from_script(&script_pubkey, network).unwrap();
+        let address = Address::from_script(&script_pubkey, network).expect("valid script");
 
-        Ok(Self {
+        Self {
             asp,
             owner,
             spend_info,
             ark_descriptor,
             address,
-        })
+        }
     }
 
     pub fn spend_info(&self) -> &TaprootSpendInfo {

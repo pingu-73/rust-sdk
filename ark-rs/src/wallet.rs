@@ -12,8 +12,8 @@ pub trait BoardingWallet {
     fn new_boarding_address(
         &mut self,
         asp_pubkey: XOnlyPublicKey,
-        exit_delay: u32,
-        descriptor_template: String,
+        exit_delay: bitcoin::Sequence,
+        descriptor_template: &str,
         network: Network,
     ) -> Result<BoardingOutput, Error>;
 

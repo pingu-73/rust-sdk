@@ -1,9 +1,9 @@
 use crate::ark_address::ArkAddress;
+use crate::asp::tree;
 use crate::asp::types::Info;
 use crate::asp::types::ListVtxo;
 use crate::asp::types::VtxoOutPoint;
-use crate::error::AspApiError;
-use crate::error::Error;
+use crate::asp::Error;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
 use crate::generated::ark::v1::AsyncPaymentInput;
 use crate::generated::ark::v1::CompletePaymentRequest;
@@ -21,7 +21,6 @@ use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
 use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
-use crate::tree;
 use async_stream::stream;
 use base64::Engine;
 use bitcoin::hashes::Hash;
@@ -71,24 +70,24 @@ pub struct TreeLevel {
 
 #[derive(Debug, Clone)]
 pub struct Node {
-    pub txid: String,
-    pub tx: String,
-    pub parent_txid: String,
+    pub txid: Txid,
+    pub tx: Psbt,
+    pub parent_txid: Txid,
 }
 
 #[derive(Debug, Clone)]
 pub struct RoundFinalizationEvent {
     pub id: String,
-    pub round_tx: String,
+    pub round_tx: Psbt,
     pub vtxo_tree: Option<Tree>,
-    pub connectors: Vec<String>,
+    pub connectors: Vec<Psbt>,
     pub min_relay_fee_rate: i64,
 }
 
 #[derive(Debug, Clone)]
 pub struct RoundFinalizedEvent {
     pub id: String,
-    pub round_txid: String,
+    pub round_txid: Txid,
 }
 
 #[derive(Debug, Clone)]
@@ -100,15 +99,15 @@ pub struct RoundFailedEvent {
 #[derive(Debug, Clone)]
 pub struct RoundSigningEvent {
     pub id: String,
-    pub cosigners_pubkeys: Vec<String>,
+    pub cosigners_pubkeys: Vec<PublicKey>,
     pub unsigned_vtxo_tree: Option<Tree>,
-    pub unsigned_round_tx: String,
+    pub unsigned_round_tx: Psbt,
 }
 
 #[derive(Debug, Clone)]
 pub struct RoundSigningNoncesGeneratedEvent {
     pub id: String,
-    pub tree_nonces: String,
+    pub tree_nonces: Vec<Vec<zkp::MusigPubNonce>>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,10 +123,10 @@ pub struct Round {
     pub id: String,
     pub start: i64,
     pub end: i64,
-    pub round_tx: String,
+    pub round_tx: Psbt,
     pub vtxo_tree: Option<Tree>,
-    pub forfeit_txs: Vec<String>,
-    pub connectors: Vec<String>,
+    pub forfeit_txs: Vec<Psbt>,
+    pub connectors: Vec<Psbt>,
     pub stage: i32,
 }
 
@@ -143,46 +142,50 @@ impl Client {
     }
 
     pub async fn connect(&mut self) -> Result<(), Error> {
-        let client = ArkServiceClient::connect(self.url.clone()).await.unwrap();
+        let client = ArkServiceClient::connect(self.url.clone())
+            .await
+            .map_err(Error::connect)?;
 
         self.inner = Some(client);
         Ok(())
     }
 
-    pub async fn get_info(&self) -> Result<Info, Error> {
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+    pub async fn get_info(&mut self) -> Result<Info, Error> {
+        let mut client = self.inner_client()?;
 
-        let response = inner.get_info(GetInfoRequest {}).await.unwrap();
+        let response = client
+            .get_info(GetInfoRequest {})
+            .await
+            .map_err(Error::request)?;
 
         response.into_inner().try_into()
     }
 
     pub async fn list_vtxos(&self, address: ArkAddress) -> Result<ListVtxo, Error> {
-        let address = address.encode()?;
+        let address = address.encode();
 
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+        let mut client = self.inner_client()?;
 
-        let response = inner
+        let response = client
             .list_vtxos(ListVtxosRequest { address })
             .await
-            .unwrap();
-        let spent: Result<Vec<VtxoOutPoint>, Error> = response
-            .get_ref()
-            .spendable_vtxos
-            .iter()
-            .map(VtxoOutPoint::try_from)
-            .collect();
-        let spendable: Result<Vec<VtxoOutPoint>, Error> = response
-            .get_ref()
-            .spendable_vtxos
-            .iter()
-            .map(VtxoOutPoint::try_from)
-            .collect();
+            .map_err(Error::request)?;
 
-        Ok(ListVtxo {
-            spent: spent?,
-            spendable: spendable?,
-        })
+        let spent = response
+            .get_ref()
+            .spendable_vtxos
+            .iter()
+            .map(VtxoOutPoint::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let spendable = response
+            .get_ref()
+            .spendable_vtxos
+            .iter()
+            .map(VtxoOutPoint::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(ListVtxo { spent, spendable })
     }
 
     pub async fn register_inputs_for_next_round(
@@ -190,7 +193,7 @@ impl Client {
         ephemeral_key: PublicKey,
         inputs: Vec<RoundInputs>,
     ) -> Result<String, Error> {
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+        let mut client = self.inner_client()?;
 
         let inputs = inputs
             .iter()
@@ -203,14 +206,14 @@ impl Client {
             })
             .collect();
 
-        let response = inner
+        let response = client
             .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
                 inputs,
                 ephemeral_pubkey: Some(ephemeral_key.to_string()),
                 notes: Vec::new(),
             })
             .await
-            .unwrap();
+            .map_err(Error::request)?;
         let payment_id = response.into_inner().id;
 
         Ok(payment_id)
@@ -221,7 +224,7 @@ impl Client {
         payment_id: String,
         outpouts: Vec<RoundOutputs>,
     ) -> Result<(), Error> {
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+        let mut client = self.inner_client()?;
 
         let outputs = outpouts
             .iter()
@@ -231,13 +234,13 @@ impl Client {
             })
             .collect();
 
-        inner
+        client
             .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
                 id: payment_id,
                 outputs,
             })
             .await
-            .unwrap();
+            .map_err(Error::request)?;
 
         Ok(())
     }
@@ -247,7 +250,7 @@ impl Client {
         inputs: Vec<PaymentInput>,
         outputs: Vec<PaymentOutput>,
     ) -> Result<Psbt, Error> {
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+        let mut client = self.inner_client()?;
 
         let inputs = inputs
             .iter()
@@ -272,15 +275,15 @@ impl Client {
         let outputs = outputs
             .iter()
             .map(|output| Output {
-                address: output.address.encode().unwrap(),
+                address: output.address.encode(),
                 amount: output.amount.to_sat(),
             })
             .collect();
 
-        let res = inner
+        let res = client
             .create_payment(CreatePaymentRequest { inputs, outputs })
             .await
-            .unwrap();
+            .map_err(Error::request)?;
 
         let base64 = base64::engine::GeneralPurpose::new(
             &base64::alphabet::STANDARD,
@@ -288,15 +291,18 @@ impl Client {
         );
 
         let signed_redeem_psbt = {
-            let psbt = base64.decode(&res.into_inner().signed_redeem_tx).unwrap();
+            let psbt = base64
+                .decode(&res.into_inner().signed_redeem_tx)
+                .map_err(Error::conversion)?;
 
-            Psbt::deserialize(&psbt).unwrap()
+            Psbt::deserialize(&psbt).map_err(Error::conversion)?
         };
+
         Ok(signed_redeem_psbt)
     }
 
     pub async fn complete_payment_request(&self, signed_psbt: Psbt) -> Result<Txid, Error> {
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+        let mut client = self.inner_client()?;
 
         let base64 = base64::engine::GeneralPurpose::new(
             &base64::alphabet::STANDARD,
@@ -305,24 +311,24 @@ impl Client {
 
         let signed_psbt_base64 = base64.encode(signed_psbt.serialize());
 
-        let _response = inner
+        let _response = client
             .complete_payment(CompletePaymentRequest {
                 signed_redeem_tx: signed_psbt_base64,
             })
             .await
-            .unwrap();
+            .map_err(Error::request)?;
         let txid = signed_psbt.unsigned_tx.compute_txid();
 
         Ok(txid)
     }
 
     pub async fn ping(&self, payment_id: String) -> Result<(), Error> {
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+        let mut client = self.inner_client()?;
 
-        inner
+        client
             .ping(PingRequest { payment_id })
             .await
-            .map_err(|e| Error::AspApi(AspApiError::Ping(e.message().to_string())))?;
+            .map_err(|e| Error::ping(e.message().to_string()))?;
 
         Ok(())
     }
@@ -333,18 +339,18 @@ impl Client {
         ephemeral_pubkey: PublicKey,
         pub_nonce_tree: Vec<Vec<zkp::MusigPubNonce>>,
     ) -> Result<(), Error> {
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+        let mut client = self.inner_client()?;
 
-        let nonce_tree = tree::encode_tree(pub_nonce_tree).unwrap();
+        let nonce_tree = tree::encode_tree(pub_nonce_tree).map_err(Error::conversion)?;
 
-        inner
+        client
             .submit_tree_nonces(SubmitTreeNoncesRequest {
                 round_id,
                 pubkey: ephemeral_pubkey.to_string(),
                 tree_nonces: nonce_tree.to_lower_hex_string(),
             })
             .await
-            .unwrap();
+            .map_err(Error::request)?;
 
         Ok(())
     }
@@ -355,18 +361,18 @@ impl Client {
         ephemeral_pubkey: zkp::PublicKey,
         partial_sig_tree: Vec<Vec<zkp::MusigPartialSignature>>,
     ) -> Result<(), Error> {
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+        let mut client = self.inner_client()?;
 
-        let tree_signatures = tree::encode_tree(partial_sig_tree).unwrap();
+        let tree_signatures = tree::encode_tree(partial_sig_tree).map_err(Error::conversion)?;
 
-        inner
+        client
             .submit_tree_signatures(SubmitTreeSignaturesRequest {
                 round_id,
                 pubkey: ephemeral_pubkey.to_string(),
                 tree_signatures: tree_signatures.to_lower_hex_string(),
             })
             .await
-            .unwrap();
+            .map_err(Error::request)?;
 
         Ok(())
     }
@@ -376,14 +382,14 @@ impl Client {
         signed_forfeit_txs: Vec<Psbt>,
         signed_round_psbt: Psbt,
     ) -> Result<(), Error> {
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+        let mut client = self.inner_client()?;
 
         let base64 = base64::engine::GeneralPurpose::new(
             &base64::alphabet::STANDARD,
             base64::engine::GeneralPurposeConfig::new(),
         );
 
-        inner
+        client
             .submit_signed_forfeit_txs(SubmitSignedForfeitTxsRequest {
                 signed_forfeit_txs: signed_forfeit_txs
                     .iter()
@@ -392,7 +398,7 @@ impl Client {
                 signed_round_tx: Some(base64.encode(signed_round_psbt.serialize())),
             })
             .await
-            .unwrap();
+            .map_err(Error::request)?;
 
         Ok(())
     }
@@ -400,12 +406,12 @@ impl Client {
     pub async fn get_event_stream(
         &self,
     ) -> Result<impl Stream<Item = Result<RoundStreamEvent, Error>> + Unpin, Error> {
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+        let mut client = self.inner_client()?;
 
-        let response = inner
+        let response = client
             .get_event_stream(GetEventStreamRequest {})
             .await
-            .unwrap();
+            .map_err(Error::request)?;
         let mut stream = response.into_inner();
 
         let stream = stream! {
@@ -416,14 +422,14 @@ impl Client {
                             tracing::debug!("Got empty message");
                         }
                         Some(event) => {
-                            yield Ok(RoundStreamEvent::from(event));
+                            yield Ok(RoundStreamEvent::try_from(event)?);
                         }
                     },
                     Ok(None) => {
-                        yield Err(Error::EvenStreamEnded);
+                        yield Err(Error::event_stream_disconnect());
                     }
-                    Err(er) => {
-                        yield Err(Error::EventStreamError(er));
+                    Err(e) => {
+                        yield Err(Error::event_stream(e));
                     }
                 }
             }
@@ -433,68 +439,127 @@ impl Client {
     }
 
     pub async fn get_round(&self, round_txid: String) -> Result<Option<Round>, Error> {
-        let mut inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
+        let mut client = self.inner_client()?;
 
-        let response = inner
+        let response = client
             .get_round(GetRoundRequest { txid: round_txid })
             .await
-            .unwrap();
+            .map_err(Error::request)?;
 
         let response = response.into_inner();
-        Ok(response.round.map(Round::from))
+        let round = response.round.map(Round::try_from).transpose()?;
+
+        Ok(round)
     }
 
-    pub fn inner(&self) -> Result<ArkServiceClient<Channel>, Error> {
-        let inner = self.inner.clone().ok_or(Error::AspNotConnected)?;
-
-        Ok(inner)
-    }
-}
-
-impl From<crate::generated::ark::v1::Tree> for Tree {
-    fn from(value: crate::generated::ark::v1::Tree) -> Self {
-        Tree {
-            levels: value.levels.into_iter().map(|level| level.into()).collect(),
-        }
+    fn inner_client(&self) -> Result<ArkServiceClient<Channel>, Error> {
+        // Cloning an `ArkServiceClient<Channel>` is cheap.
+        self.inner.clone().ok_or(Error::not_connected())
     }
 }
 
-impl From<crate::generated::ark::v1::TreeLevel> for TreeLevel {
-    fn from(value: crate::generated::ark::v1::TreeLevel) -> Self {
-        TreeLevel {
-            nodes: value.nodes.into_iter().map(|node| node.into()).collect(),
-        }
+impl TryFrom<crate::generated::ark::v1::Tree> for Tree {
+    type Error = Error;
+
+    fn try_from(value: crate::generated::ark::v1::Tree) -> Result<Self, Self::Error> {
+        let levels = value
+            .levels
+            .into_iter()
+            .map(|level| level.try_into())
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        Ok(Tree { levels })
     }
 }
 
-impl From<crate::generated::ark::v1::Node> for Node {
-    fn from(value: crate::generated::ark::v1::Node) -> Self {
-        Node {
-            txid: value.txid,
-            tx: value.tx,
-            parent_txid: value.parent_txid,
-        }
+impl TryFrom<crate::generated::ark::v1::TreeLevel> for TreeLevel {
+    type Error = Error;
+
+    fn try_from(value: crate::generated::ark::v1::TreeLevel) -> Result<Self, Self::Error> {
+        let nodes = value
+            .nodes
+            .into_iter()
+            .map(|node| node.try_into())
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        Ok(TreeLevel { nodes })
     }
 }
 
-impl From<crate::generated::ark::v1::RoundFinalizationEvent> for RoundFinalizationEvent {
-    fn from(value: crate::generated::ark::v1::RoundFinalizationEvent) -> Self {
-        RoundFinalizationEvent {
+impl TryFrom<crate::generated::ark::v1::Node> for Node {
+    type Error = Error;
+
+    fn try_from(value: crate::generated::ark::v1::Node) -> Result<Self, Self::Error> {
+        let txid: Txid = value.txid.parse().map_err(Error::conversion)?;
+
+        let tx = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        )
+        .decode(&value.tx)
+        .map_err(Error::conversion)?;
+
+        let tx = Psbt::deserialize(&tx).map_err(Error::conversion)?;
+
+        let parent_txid: Txid = value.parent_txid.parse().map_err(Error::conversion)?;
+
+        Ok(Node {
+            txid,
+            tx,
+            parent_txid,
+        })
+    }
+}
+
+impl TryFrom<crate::generated::ark::v1::RoundFinalizationEvent> for RoundFinalizationEvent {
+    type Error = Error;
+
+    fn try_from(
+        value: crate::generated::ark::v1::RoundFinalizationEvent,
+    ) -> Result<Self, Self::Error> {
+        let base64 = &base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        );
+
+        let vtxo_tree = value.vtxo_tree.map(|tree| tree.try_into()).transpose()?;
+
+        let round_tx = base64.decode(&value.round_tx).map_err(Error::conversion)?;
+
+        let round_tx = Psbt::deserialize(&round_tx).map_err(Error::conversion)?;
+
+        let connectors = value
+            .connectors
+            .into_iter()
+            .map(|t| {
+                let psbt = base64.decode(&t).map_err(Error::conversion)?;
+                let psbt = Psbt::deserialize(&psbt).map_err(Error::conversion)?;
+                Ok(psbt)
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        Ok(RoundFinalizationEvent {
             id: value.id,
-            round_tx: value.round_tx,
-            vtxo_tree: value.vtxo_tree.map(|tree| tree.into()),
-            connectors: value.connectors,
+            round_tx,
+            vtxo_tree,
+            connectors,
             min_relay_fee_rate: value.min_relay_fee_rate,
-        }
+        })
     }
 }
 
-impl From<crate::generated::ark::v1::RoundFinalizedEvent> for RoundFinalizedEvent {
-    fn from(value: crate::generated::ark::v1::RoundFinalizedEvent) -> Self {
-        RoundFinalizedEvent {
+impl TryFrom<crate::generated::ark::v1::RoundFinalizedEvent> for RoundFinalizedEvent {
+    type Error = Error;
+
+    fn try_from(
+        value: crate::generated::ark::v1::RoundFinalizedEvent,
+    ) -> Result<Self, Self::Error> {
+        let round_txid = value.round_txid.parse().map_err(Error::conversion)?;
+
+        Ok(RoundFinalizedEvent {
             id: value.id,
-            round_txid: value.round_txid,
-        }
+            round_txid,
+        })
     }
 }
 
@@ -507,61 +572,125 @@ impl From<crate::generated::ark::v1::RoundFailed> for RoundFailedEvent {
     }
 }
 
-impl From<crate::generated::ark::v1::RoundSigningEvent> for RoundSigningEvent {
-    fn from(value: crate::generated::ark::v1::RoundSigningEvent) -> Self {
-        RoundSigningEvent {
+impl TryFrom<crate::generated::ark::v1::RoundSigningEvent> for RoundSigningEvent {
+    type Error = Error;
+
+    fn try_from(value: crate::generated::ark::v1::RoundSigningEvent) -> Result<Self, Self::Error> {
+        let unsigned_round_tx = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        )
+        .decode(&value.unsigned_round_tx)
+        .map_err(Error::conversion)?;
+
+        let unsigned_vtxo_tree = value
+            .unsigned_vtxo_tree
+            .map(|tree| tree.try_into())
+            .transpose()?;
+
+        let unsigned_round_tx = Psbt::deserialize(&unsigned_round_tx).map_err(Error::conversion)?;
+
+        Ok(RoundSigningEvent {
             id: value.id,
-            cosigners_pubkeys: value.cosigners_pubkeys,
-            unsigned_vtxo_tree: value.unsigned_vtxo_tree.map(|tree| tree.into()),
-            unsigned_round_tx: value.unsigned_round_tx,
-        }
+            cosigners_pubkeys: value
+                .cosigners_pubkeys
+                .into_iter()
+                .map(|pk| pk.parse().map_err(Error::conversion))
+                .collect::<Result<Vec<_>, Error>>()?,
+            unsigned_vtxo_tree,
+            unsigned_round_tx,
+        })
     }
 }
 
-impl From<crate::generated::ark::v1::RoundSigningNoncesGeneratedEvent>
+impl TryFrom<crate::generated::ark::v1::RoundSigningNoncesGeneratedEvent>
     for RoundSigningNoncesGeneratedEvent
 {
-    fn from(value: crate::generated::ark::v1::RoundSigningNoncesGeneratedEvent) -> Self {
-        RoundSigningNoncesGeneratedEvent {
+    type Error = Error;
+
+    fn try_from(
+        value: crate::generated::ark::v1::RoundSigningNoncesGeneratedEvent,
+    ) -> Result<Self, Self::Error> {
+        let tree_nonces = crate::asp::decode_tree(value.tree_nonces)?;
+
+        Ok(RoundSigningNoncesGeneratedEvent {
             id: value.id,
-            tree_nonces: value.tree_nonces,
-        }
+            tree_nonces,
+        })
     }
 }
 
-impl From<crate::generated::ark::v1::get_event_stream_response::Event> for RoundStreamEvent {
-    fn from(value: crate::generated::ark::v1::get_event_stream_response::Event) -> Self {
-        match value {
+impl TryFrom<crate::generated::ark::v1::get_event_stream_response::Event> for RoundStreamEvent {
+    type Error = Error;
+
+    fn try_from(
+        value: crate::generated::ark::v1::get_event_stream_response::Event,
+    ) -> Result<Self, Self::Error> {
+        Ok(match value {
             crate::generated::ark::v1::get_event_stream_response::Event::RoundFinalization(e) => {
-                RoundStreamEvent::RoundFinalization(e.into())
+                RoundStreamEvent::RoundFinalization(e.try_into()?)
             }
             crate::generated::ark::v1::get_event_stream_response::Event::RoundFinalized(e) => {
-                RoundStreamEvent::RoundFinalized(e.into())
+                RoundStreamEvent::RoundFinalized(e.try_into()?)
             }
             crate::generated::ark::v1::get_event_stream_response::Event::RoundFailed(e) => {
                 RoundStreamEvent::RoundFailed(e.into())
             }
             crate::generated::ark::v1::get_event_stream_response::Event::RoundSigning(e) => {
-                RoundStreamEvent::RoundSigning(e.into())
+                RoundStreamEvent::RoundSigning(e.try_into()?)
             }
             crate::generated::ark::v1::get_event_stream_response::Event::RoundSigningNoncesGenerated(e) => {
-                RoundStreamEvent::RoundSigningNoncesGenerated(e.into())
+                RoundStreamEvent::RoundSigningNoncesGenerated(e.try_into()?)
             }
-        }
+        })
     }
 }
 
-impl From<crate::generated::ark::v1::Round> for Round {
-    fn from(value: crate::generated::ark::v1::Round) -> Self {
-        Round {
+impl TryFrom<crate::generated::ark::v1::Round> for Round {
+    type Error = Error;
+
+    fn try_from(value: crate::generated::ark::v1::Round) -> Result<Self, Self::Error> {
+        let base64 = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        );
+
+        let round_tx = {
+            let psbt = base64.decode(&value.round_tx).map_err(Error::conversion)?;
+            Psbt::deserialize(&psbt).map_err(Error::conversion)?
+        };
+
+        let vtxo_tree = value.vtxo_tree.map(|tree| tree.try_into()).transpose()?;
+
+        let forfeit_txs = value
+            .forfeit_txs
+            .into_iter()
+            .map(|t| {
+                let psbt = base64.decode(&t).map_err(Error::conversion)?;
+                let psbt = Psbt::deserialize(&psbt).map_err(Error::conversion)?;
+                Ok(psbt)
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        let connectors = value
+            .connectors
+            .into_iter()
+            .map(|t| {
+                let psbt = base64.decode(&t).map_err(Error::conversion)?;
+                let psbt = Psbt::deserialize(&psbt).map_err(Error::conversion)?;
+                Ok(psbt)
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        Ok(Round {
             id: value.id,
             start: value.start,
             end: value.end,
-            round_tx: value.round_tx,
-            vtxo_tree: value.vtxo_tree.map(|tree| tree.into()),
-            forfeit_txs: value.forfeit_txs,
-            connectors: value.connectors,
+            round_tx,
+            vtxo_tree,
+            forfeit_txs,
+            connectors,
             stage: value.stage,
-        }
+        })
     }
 }
