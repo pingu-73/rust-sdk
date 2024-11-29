@@ -28,6 +28,8 @@ enum Kind {
     CoinSelect(CoinSelectError),
     /// An error related to parsing an Ark address.
     ParseArkAddress(ParseArkAddressError),
+    /// An error related to actions within the wallet
+    Wallet(WalletError),
 }
 
 #[derive(Debug)]
@@ -57,6 +59,11 @@ struct CoinSelectError {
 
 #[derive(Debug)]
 struct ParseArkAddressError {
+    source: Source,
+}
+
+#[derive(Debug)]
+struct WalletError {
     source: Source,
 }
 
@@ -102,6 +109,12 @@ impl Error {
             source: source.into(),
         }))
     }
+
+    pub fn wallet(source: impl Into<Source>) -> Self {
+        Error::new(Kind::Wallet(WalletError {
+            source: source.into(),
+        }))
+    }
 }
 
 impl fmt::Display for Error {
@@ -128,6 +141,7 @@ impl fmt::Display for Kind {
             Kind::Transaction(ref err) => err.fmt(f),
             Kind::CoinSelect(ref err) => err.fmt(f),
             Kind::ParseArkAddress(ref err) => err.fmt(f),
+            Kind::Wallet(ref err) => err.fmt(f),
         }
     }
 }
@@ -168,7 +182,13 @@ impl fmt::Display for ParseArkAddressError {
     }
 }
 
-pub(crate) trait IntoError {
+impl fmt::Display for WalletError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.source.fmt(f)
+    }
+}
+
+pub trait IntoError {
     fn into_error(self) -> Error;
 }
 
@@ -197,7 +217,7 @@ impl IntoError for String {
 /// `map_err` everywhere one wants to add context to an error.
 ///
 /// This trick was borrowed from `jiff`, which borrowed it from `anyhow`.
-pub(crate) trait ErrorContext {
+pub trait ErrorContext {
     /// Contextualize the given consequent error with this (`self`) error as
     /// the cause.
     ///
