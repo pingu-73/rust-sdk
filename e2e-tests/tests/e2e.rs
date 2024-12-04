@@ -360,7 +360,8 @@ async fn setup_client(
 ) {
     let db = InMemoryDb::default();
     let wallet =
-        ark_bdk_wallet::Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db);
+        ark_bdk_wallet::Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db)
+            .unwrap();
     let wallet = Arc::new(Mutex::new(wallet));
 
     let client = OfflineClient::new(name, kp, nigiri, wallet.clone())

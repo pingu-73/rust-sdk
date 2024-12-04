@@ -335,7 +335,7 @@ async fn setup_client(
     Arc<Mutex<Wallet<InMemoryDb>>>,
 ) {
     let db = InMemoryDb::default();
-    let wallet = Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db);
+    let wallet = Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db).unwrap();
     let wallet = Arc::new(Mutex::new(wallet));
     let client = OfflineClient::new(name, kp, nigiri, wallet.clone())
         .connect()
