@@ -144,8 +144,11 @@ where
         Ok(())
     }
 
-    fn sign(&self, psbt: &mut Psbt, sign_options: SignOptions) -> Result<bool, Error> {
-        let finalized = self.inner.sign(psbt, sign_options).map_err(Error::wallet)?;
+    fn sign(&self, psbt: &mut Psbt) -> Result<bool, Error> {
+        let finalized = self
+            .inner
+            .sign(psbt, SignOptions::default())
+            .map_err(Error::wallet)?;
 
         Ok(finalized)
     }

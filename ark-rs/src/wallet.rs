@@ -1,6 +1,5 @@
 use crate::boarding_output::BoardingOutput;
 use crate::error::Error;
-use bdk_wallet::SignOptions;
 use bitcoin::secp256k1::schnorr::Signature;
 use bitcoin::secp256k1::Message;
 use bitcoin::secp256k1::SecretKey;
@@ -49,7 +48,7 @@ pub trait OnchainWallet {
         tx: &Transaction,
     ) -> impl std::future::Future<Output = Result<(), Error>> + Send;
 
-    fn sign(&self, psbt: &mut Psbt, sign_options: SignOptions) -> Result<bool, Error>;
+    fn sign(&self, psbt: &mut Psbt) -> Result<bool, Error>;
 }
 
 pub trait Persistence {
