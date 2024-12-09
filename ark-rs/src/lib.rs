@@ -8,7 +8,7 @@ use crate::asp::RoundStreamEvent;
 use crate::asp::Tree;
 use crate::asp::VtxoOutPoint;
 use crate::boarding_output::BoardingOutput;
-use crate::coinselect::coin_select_for_oor;
+use crate::coin_select::coin_select_for_oor;
 use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
 use crate::default_vtxo::DefaultVtxo;
@@ -79,7 +79,7 @@ pub mod default_vtxo;
 pub mod error;
 pub mod wallet;
 
-mod coinselect;
+mod coin_select;
 mod conversions;
 mod forfeit_fee;
 mod internal_node;
