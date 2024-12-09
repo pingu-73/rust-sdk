@@ -41,7 +41,6 @@ impl BoardingOutput {
         let multisig_script = multisig_script(asp, owner);
         let exit_script = csv_sig_script(exit_delay, owner);
 
-        // TODO: Order of leaves could be wrong now.
         let spend_info = TaprootBuilder::new()
             .add_leaf(1, multisig_script)
             .expect("valid multisig leaf")

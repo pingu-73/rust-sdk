@@ -53,7 +53,7 @@ pub struct RoundInputs {
 }
 
 pub struct RoundOutputs {
-    // TODO: would be cool to have a type here which accepts ArkAddress and bitcoin::Address
+    // TODO: Would be cool to have a type here which accepts `ArkAddress` and `bitcoin::Address`.
     pub address: String,
     pub amount: Amount,
 }

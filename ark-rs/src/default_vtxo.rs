@@ -15,7 +15,6 @@ use bitcoin::Network;
 use bitcoin::ScriptBuf;
 use bitcoin::XOnlyPublicKey;
 
-/// tr(unspendable, { and(pk(user), pk(asp)), and(older(timeout), pk(user)) })
 const DEFAULT_VTXO_DESCRIPTOR_TEMPLATE: &str =
     "tr(UNSPENDABLE_KEY,{and(pk(USER),pk(ASP)),and(older(TIMEOUT),pk(USER))})";
 
@@ -45,7 +44,6 @@ impl DefaultVtxo {
         let forfeit_script = multisig_script(asp, owner);
         let redeem_script = csv_sig_script(exit_delay, owner);
 
-        // TODO: Order of leaves could be wrong now.
         let spend_info = TaprootBuilder::new()
             .add_leaf(1, forfeit_script)
             .expect("valid forfeit leaf")

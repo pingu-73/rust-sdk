@@ -85,9 +85,6 @@ mod forfeit_fee;
 mod internal_node;
 mod script;
 
-// TODO: Figure out how to integrate on-chain wallet. Probably use a trait and implement using
-// `bdk`.
-
 const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
 
 const VTXO_INPUT_INDEX: usize = 0;
@@ -233,7 +230,7 @@ where
         Ok(spendable)
     }
 
-    // In go client: Balance (minus the on-chain balance, TODO).
+    // In go client: Balance.
     pub async fn offchain_balance(&self) -> Result<Amount, Error> {
         let list = self.spendable_vtxos().await?;
         let sum = list
@@ -265,8 +262,8 @@ where
 
         // Joining a round is likely to fail depending on the timing, so we keep retrying.
         //
-        // TODO: Consider not retrying on all errors. ATM the retry mechanism is way too quick as
-        // well. We should use backoff and only retry on ephemeral errors.
+        // TODO: Consider not retrying on all errors. We should use backoff and only retry on
+        // ephemeral errors.
         let txid = loop {
             match self
                 .join_next_ark_round(
@@ -330,9 +327,6 @@ where
         );
 
         // Joining a round is likely to fail depending on the timing, so we keep retrying.
-        //
-        // TODO: Consider not retrying on all errors. ATM the retry mechanism is way too quick as
-        // well. We should use backoff and only retry on ephemeral errors.
         let txid = loop {
             match self
                 .join_next_ark_round(
@@ -668,7 +662,6 @@ where
                                     let input_vout =
                                         tx.input[VTXO_INPUT_INDEX].previous_output.vout as usize;
 
-                                    // TODO: Test the protocol with a larger VTXO tree!
                                     let prevout = if i == 0 {
                                         unsigned_round_tx.clone().unsigned_tx.output[input_vout]
                                             .clone()
@@ -837,7 +830,6 @@ where
                         }
                         RoundStreamEvent::RoundFailed(e) => {
                             if Some(&e.id) == round_id.as_ref() {
-                                // TODO: Return a different error (and in many, many other places).
                                 return Err(Error::asp(format!(
                                     "failed registering in round {}: {}",
                                     e.id, e.reason
@@ -1206,7 +1198,7 @@ where
             while let Err(e) = self.blockchain().broadcast(tx).await {
                 tracing::warn!(%txid, "Error broadcasting VTXO transaction: {e:?}");
 
-                // TODO: Should only retry specific errors, but the API is too rough atm.
+                // TODO: Should only retry specific errors.
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
 

@@ -276,8 +276,6 @@ impl Blockchain for Nigiri {
         Ok(tx)
     }
 
-    // TODO: Make sure we return a proper error here, so that we can retry if we encounter a
-    // `bad-txns-inputs-missingorspent` error.
     async fn broadcast(&self, tx: &Transaction) -> Result<(), Error> {
         self.esplora_client.broadcast(tx).unwrap();
 

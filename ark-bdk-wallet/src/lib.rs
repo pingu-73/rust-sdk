@@ -96,7 +96,8 @@ where
             .elapsed()
             .map_err(Error::wallet)?
             .as_secs();
-        // TODO: use smarter constants or make it configurable
+
+        // TODO: Use smarter constants or make it configurable.
         let update = self
             .client
             .full_scan(request, 5, 5)
