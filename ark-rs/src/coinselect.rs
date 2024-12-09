@@ -7,7 +7,18 @@ pub struct Utxo {
     pub amount: Amount,
 }
 
-pub fn coin_select(
+/// Select coins to be used as inputs in offchain transactions in collaboration with the ASP.
+///
+/// Types of coins selected:
+///
+/// - Boarding outputs to _board_ the ARK by joining the next round (becoming VTXOs in the process).
+///
+/// - VTXOs to be transferred to the next round.
+///
+/// FIXME: We copied this from the go library, but I think it doesn't work to combine these two
+/// types of coins and selectively ignore one of the two outputs! We should have dedicated
+/// functions, to some extent.
+pub fn coin_select_offchain(
     boarding_utxos: Vec<Utxo>,
     mut vtxo_outpoints: Vec<VtxoOutPoint>,
     amount: Amount,
@@ -99,7 +110,7 @@ mod tests {
 
         let vtxos = vec![vtxo(123456789, Amount::from_sat(2000))];
 
-        let result = coin_select(
+        let result = coin_select_offchain(
             boarding_utxos,
             vtxos,
             Amount::from_sat(2500),
@@ -122,7 +133,7 @@ mod tests {
 
         let vtxos = vec![vtxo(123456789, Amount::from_sat(100))];
 
-        let result = coin_select(
+        let result = coin_select_offchain(
             boarding_utxos,
             vtxos,
             Amount::from_sat(1000),

@@ -8,7 +8,7 @@ use crate::asp::RoundStreamEvent;
 use crate::asp::Tree;
 use crate::asp::VtxoOutPoint;
 use crate::boarding_output::BoardingOutput;
-use crate::coinselect::coin_select;
+use crate::coinselect::coin_select_offchain;
 use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
 use crate::default_vtxo::DefaultVtxo;
@@ -894,7 +894,7 @@ where
             .flat_map(|(vtxos, _)| vtxos.clone())
             .collect::<Vec<_>>();
 
-        let (_, selected_coins, change_amount) = coin_select(
+        let (_, selected_coins, change_amount) = coin_select_offchain(
             vec![],
             spendable_vtxo_outpoints,
             amount,
