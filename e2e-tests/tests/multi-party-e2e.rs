@@ -24,7 +24,7 @@ mod common;
 #[tokio::test]
 pub async fn multi_party_e2e() {
     init_tracing();
-    let nigiri = Arc::new(Nigiri::new());
+    let nigiri = Arc::new(Nigiri::default());
 
     let secp = Secp256k1::new();
     let mut rng = thread_rng();

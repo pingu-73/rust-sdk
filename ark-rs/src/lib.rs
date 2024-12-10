@@ -21,6 +21,7 @@ use crate::wallet::BoardingWallet;
 use crate::wallet::OnchainWallet;
 use bitcoin::absolute::LockTime;
 use bitcoin::hashes::Hash;
+use bitcoin::hex::DisplayHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::Secp256k1;
 use bitcoin::relative;
@@ -318,6 +319,35 @@ where
         to_address: Address,
         to_amount: Amount,
     ) -> Result<Txid, Error> {
+        let (tx, _) = self
+            .create_send_on_chain_transaction(to_address, to_amount)
+            .await?;
+
+        let txid = tx.compute_txid();
+        tracing::info!(
+            %txid,
+            "Broadcasting transaction sending Ark outputs onchain"
+        );
+
+        self.blockchain()
+            .broadcast(&tx)
+            .await
+            .context("failed to broadcast transaction {tx}")?;
+
+        Ok(txid)
+    }
+
+    /// Helper function to `send_off_chain`.
+    ///
+    /// We extract this and keep it as part of the public API to be able to test the resulting
+    /// transaction in the e2e tests without needing to wait for a long time.
+    ///
+    /// TODO: Obviously, it's bad to have this as part of the public API. Do something about it!
+    pub async fn create_send_on_chain_transaction(
+        &self,
+        to_address: Address,
+        to_amount: Amount,
+    ) -> Result<(Transaction, Vec<TxOut>), Error> {
         if to_amount < self.asp_info.dust {
             return Err(Error::ad_hoc(format!(
                 "invalid amount {to_amount}, must be greater than dust: {}",
@@ -406,7 +436,6 @@ where
             .iter()
             .filter_map(|i| i.witness_utxo.clone())
             .collect::<Vec<_>>();
-        let prevouts = Prevouts::All(&prevouts);
 
         // Sign each input.
         for (i, input) in psbt.inputs.iter_mut().enumerate() {
@@ -430,7 +459,7 @@ where
             let tap_sighash = SighashCache::new(&psbt.unsigned_tx)
                 .taproot_script_spend_signature_hash(
                     i,
-                    &prevouts,
+                    &Prevouts::All(&prevouts),
                     leaf_hash,
                     TapSighashType::Default,
                 )
@@ -446,7 +475,7 @@ where
                 .map_err(Error::crypto)
                 .context("failed to verify own signature")?;
 
-            let sig = taproot::Signature {
+            let tap_sig = taproot::Signature {
                 signature: sig,
                 sighash_type: TapSighashType::Default,
             };
@@ -456,25 +485,27 @@ where
                 (exit_script.clone(), leaf_version),
             )]);
             input.sighash_type = Some(TapSighashType::Default.into());
-            input.tap_script_sigs = BTreeMap::from_iter([((pk, leaf_hash), sig)]);
+            input.tap_script_sigs = BTreeMap::from_iter([((pk, leaf_hash), tap_sig)]);
+
+            let witness = Witness::from_slice(&[
+                &sig[..],
+                exit_script.as_bytes(),
+                &exit_control_block.serialize(),
+            ]);
+
+            input.final_script_witness = Some(witness);
         }
 
         let tx = psbt.clone().extract_tx().map_err(Error::transaction)?;
 
-        let txid = tx.compute_txid();
-        tracing::info!(
-            %txid,
+        tracing::debug!(
             ?selected_boarding_outputs,
             ?selected_vtxos,
-            "Broadcasting transaction sending Ark outputs onchain"
+            raw_tx = %bitcoin::consensus::serialize(&tx).as_hex(),
+            "Built transaction sending Ark outputs onchain"
         );
 
-        self.blockchain()
-            .broadcast(&tx)
-            .await
-            .context("failed to broadcast transaction {tx}")?;
-
-        Ok(txid)
+        Ok((tx, prevouts))
     }
 
     // In go client: CollaborativeRedeem.
@@ -1220,7 +1251,7 @@ where
         Ok(txid)
     }
 
-    // In go client: UnilateralRedeem.
+    /// Publish all the relevant transactions in the VTXO tree to get our VTXOs onchain.
     pub async fn unilateral_off_board(&self) -> Result<(), Error> {
         let spendable_vtxos = self.spendable_vtxos().await?;
 

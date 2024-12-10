@@ -27,14 +27,22 @@ use tokio::sync::Mutex;
 
 pub struct Nigiri {
     esplora_client: esplora_client::BlockingClient,
+    /// By how much we _reduce_ the block time of outpoints.
+    ///
+    /// This can be used to ensure that certain outpoints are considered spendable, which is useful
+    /// for testing scripts with opcodes such as `OP_CSV`.
+    outpoint_blocktime_offset: Option<u64>,
 }
 
 impl Nigiri {
-    pub fn new() -> Self {
+    pub fn new(outpoint_blocktime_offset: Option<u64>) -> Self {
         let builder = esplora_client::Builder::new("http://localhost:30000");
         let esplora_client = builder.build_blocking();
 
-        Self { esplora_client }
+        Self {
+            esplora_client,
+            outpoint_blocktime_offset,
+        }
     }
 
     pub async fn faucet_fund(&self, address: &Address, amount: Amount) -> OutPoint {
@@ -78,7 +86,7 @@ impl Nigiri {
             .unwrap();
 
         // Wait for output to be confirmed.
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
         OutPoint {
             txid,
@@ -86,8 +94,9 @@ impl Nigiri {
         }
     }
 
-    async fn _mine(&self, n: u32) {
-        for _ in 0..n {
+    #[allow(unused)]
+    pub async fn mine(&self, n: u32) {
+        for i in 0..n {
             self.faucet_fund(
                 &Address::from_str("bcrt1q8frde3yn78tl9ecgq4anlz909jh0clefhucdur")
                     .unwrap()
@@ -95,13 +104,15 @@ impl Nigiri {
                 Amount::from_sat(10_000),
             )
             .await;
+
+            tracing::debug!(i, "Mined a block");
         }
     }
 }
 
 impl Default for Nigiri {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
@@ -117,7 +128,14 @@ impl Blockchain for Nigiri {
             .into_iter()
             .flat_map(|tx| {
                 let txid = tx.txid;
-                let confirmation_blocktime = tx.status.block_time;
+
+                let confirmation_blocktime =
+                    if let Some(blocktime_fastforward) = self.outpoint_blocktime_offset {
+                        tx.status.block_time.map(|t| t - blocktime_fastforward)
+                    } else {
+                        tx.status.block_time
+                    };
+
                 tx.vout
                     .iter()
                     .enumerate()
