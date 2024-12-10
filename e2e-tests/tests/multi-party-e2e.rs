@@ -54,23 +54,23 @@ pub async fn multi_party_e2e() {
     )
     .await;
 
-    let alice_boarding_address = new_boarding_address(&alice, &alice_wallet).await;
-    let bob_boarding_address = new_boarding_address(&bob, &bob_wallet).await;
-    let claire_boarding_address = new_boarding_address(&claire, &claire_wallet).await;
+    let alice_boarding_output = new_boarding_output(&alice, &alice_wallet).await;
+    let bob_boarding_output = new_boarding_output(&bob, &bob_wallet).await;
+    let claire_boarding_output = new_boarding_output(&claire, &claire_wallet).await;
 
     let alice_initial_balance = Amount::ONE_BTC;
     let alice_boarding_output = nigiri
-        .faucet_fund(alice_boarding_address.address(), alice_initial_balance)
+        .faucet_fund(alice_boarding_output.address(), alice_initial_balance)
         .await;
 
     let bob_initial_balance = Amount::ONE_BTC;
     let bob_boarding_output = nigiri
-        .faucet_fund(bob_boarding_address.address(), bob_initial_balance)
+        .faucet_fund(bob_boarding_output.address(), bob_initial_balance)
         .await;
 
     let claire_initial_balance = Amount::ONE_BTC;
     let claire_boarding_output = nigiri
-        .faucet_fund(claire_boarding_address.address(), claire_initial_balance)
+        .faucet_fund(claire_boarding_output.address(), claire_initial_balance)
         .await;
 
     tracing::debug!("Boarding output alice: {alice_boarding_output:?}");
@@ -139,7 +139,7 @@ pub async fn multi_party_e2e() {
     assert_eq!(bob_offchain_balance, bob_initial_balance + amount * 2);
 }
 
-async fn new_boarding_address(
+async fn new_boarding_output(
     client: &Client<Nigiri, Wallet<InMemoryDb>>,
     alice_wallet: &Arc<Mutex<Wallet<InMemoryDb>>>,
 ) -> BoardingOutput {
@@ -149,7 +149,7 @@ async fn new_boarding_address(
 
     let mut wallet = alice_wallet.lock().await;
     wallet
-        .new_boarding_address(
+        .new_boarding_output(
             asp_pk,
             alice_asp_info.round_lifetime,
             &alice_asp_info.boarding_descriptor_template,

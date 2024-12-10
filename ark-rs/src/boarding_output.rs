@@ -16,7 +16,6 @@ use bitcoin::ScriptBuf;
 use bitcoin::XOnlyPublicKey;
 use std::time::Duration;
 
-// FIXME: Rename everywhere from "boarding address" to "boarding output".
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoardingOutput {
     asp: XOnlyPublicKey,

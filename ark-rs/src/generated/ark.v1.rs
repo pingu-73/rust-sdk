@@ -751,7 +751,7 @@ pub mod ark_service_client {
                 .insert(GrpcMethod::new("ark.v1.ArkService", "GetInfo"));
             self.inner.unary(req, path, codec).await
         }
-        pub async fn get_boarding_address(
+        pub async fn get_boarding_output(
             &mut self,
             request: impl tonic::IntoRequest<super::GetBoardingAddressRequest>,
         ) -> std::result::Result<tonic::Response<super::GetBoardingAddressResponse>, tonic::Status>

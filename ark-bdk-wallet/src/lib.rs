@@ -158,7 +158,7 @@ impl<DB> BoardingWallet for Wallet<DB>
 where
     DB: Persistence,
 {
-    fn new_boarding_address(
+    fn new_boarding_output(
         &mut self,
         asp_pubkey: XOnlyPublicKey,
         exit_delay: bitcoin::Sequence,
@@ -178,25 +178,25 @@ where
         );
 
         self.db
-            .save_boarding_address(sk, address.clone())
-            .context("Failed saving boarding address")?;
+            .save_boarding_output(sk, address.clone())
+            .context("Failed saving boarding output")?;
 
         Ok(address)
     }
 
-    fn get_boarding_addresses(&self) -> Result<Vec<BoardingOutput>, Error> {
-        self.db.load_boarding_addresses()
+    fn get_boarding_outputs(&self) -> Result<Vec<BoardingOutput>, Error> {
+        self.db.load_boarding_outputs()
     }
 
-    fn sign_boarding_address(
+    fn sign_boarding_output(
         &self,
-        boarding_address: &BoardingOutput,
+        boarding_output: &BoardingOutput,
         msg: &Message,
     ) -> Result<(Signature, XOnlyPublicKey), Error> {
         let key = self
             .db
-            .sk_for_boarding_address(boarding_address)
-            .context("Failed retrieving secret key for boarding address")?;
+            .sk_for_boarding_output(boarding_output)
+            .context("Failed retrieving secret key for boarding output")?;
 
         let sig = self
             .secp

@@ -193,16 +193,16 @@ pub struct InMemoryDb {
 }
 
 impl Persistence for InMemoryDb {
-    fn save_boarding_address(
+    fn save_boarding_output(
         &mut self,
         sk: SecretKey,
-        boarding_address: BoardingOutput,
+        boarding_output: BoardingOutput,
     ) -> Result<(), Error> {
-        self.boarding_outputs.push((sk, boarding_address));
+        self.boarding_outputs.push((sk, boarding_output));
         Ok(())
     }
 
-    fn load_boarding_addresses(&self) -> Result<Vec<BoardingOutput>, Error> {
+    fn load_boarding_outputs(&self) -> Result<Vec<BoardingOutput>, Error> {
         Ok(self
             .boarding_outputs
             .clone()
@@ -211,12 +211,9 @@ impl Persistence for InMemoryDb {
             .collect())
     }
 
-    fn sk_for_boarding_address(
-        &self,
-        boarding_address: &BoardingOutput,
-    ) -> Result<SecretKey, Error> {
+    fn sk_for_boarding_output(&self, boarding_output: &BoardingOutput) -> Result<SecretKey, Error> {
         let maybe_sk = self.boarding_outputs.iter().find_map(|(sk, b)| {
-            if b == boarding_address {
+            if b == boarding_output {
                 Some(*sk)
             } else {
                 None

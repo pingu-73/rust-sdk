@@ -12,7 +12,7 @@ use bitcoin::Transaction;
 use bitcoin::XOnlyPublicKey;
 
 pub trait BoardingWallet {
-    fn new_boarding_address(
+    fn new_boarding_output(
         &mut self,
         asp_pubkey: XOnlyPublicKey,
         exit_delay: bitcoin::Sequence,
@@ -20,11 +20,11 @@ pub trait BoardingWallet {
         network: Network,
     ) -> Result<BoardingOutput, Error>;
 
-    fn get_boarding_addresses(&self) -> Result<Vec<BoardingOutput>, Error>;
+    fn get_boarding_outputs(&self) -> Result<Vec<BoardingOutput>, Error>;
 
-    fn sign_boarding_address(
+    fn sign_boarding_output(
         &self,
-        boarding_address: &BoardingOutput,
+        boarding_output: &BoardingOutput,
         msg: &Message,
     ) -> Result<(Signature, XOnlyPublicKey), Error>;
 }
@@ -52,18 +52,15 @@ pub trait OnchainWallet {
 }
 
 pub trait Persistence {
-    fn save_boarding_address(
+    fn save_boarding_output(
         &mut self,
         sk: SecretKey,
-        boarding_address: BoardingOutput,
+        boarding_output: BoardingOutput,
     ) -> Result<(), Error>;
 
-    fn load_boarding_addresses(&self) -> Result<Vec<BoardingOutput>, Error>;
+    fn load_boarding_outputs(&self) -> Result<Vec<BoardingOutput>, Error>;
 
-    fn sk_for_boarding_address(
-        &self,
-        boarding_address: &BoardingOutput,
-    ) -> Result<SecretKey, Error>;
+    fn sk_for_boarding_output(&self, boarding_output: &BoardingOutput) -> Result<SecretKey, Error>;
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -33,14 +33,14 @@ pub async fn e2e() {
     )
     .await;
 
-    let alice_boarding_address = {
+    let alice_boarding_output = {
         let alice_asp_info = alice.asp_info.clone();
         let asp_pk = alice_asp_info.pk;
         let (asp_pk, _) = asp_pk.inner.x_only_public_key();
 
         let mut wallet = alice_wallet.lock().await;
         wallet
-            .new_boarding_address(
+            .new_boarding_output(
                 asp_pk,
                 alice_asp_info.round_lifetime,
                 &alice_asp_info.boarding_descriptor_template,
@@ -50,7 +50,7 @@ pub async fn e2e() {
     };
 
     let boarding_output = nigiri
-        .faucet_fund(alice_boarding_address.address(), Amount::ONE_BTC)
+        .faucet_fund(alice_boarding_output.address(), Amount::ONE_BTC)
         .await;
 
     tracing::debug!("Boarding output: {boarding_output:?}");

@@ -578,10 +578,10 @@ where
         ),
         Error,
     > {
-        // Get all known boarding addresses.
-        let boarding_addresses = {
+        // Get all known boarding outputs.
+        let boarding_outputs = {
             let wallet = self.inner.wallet().await;
-            wallet.get_boarding_addresses()?
+            wallet.get_boarding_outputs()?
         };
 
         let mut boarding_inputs: Vec<(OutPoint, BoardingOutput)> = Vec::new();
@@ -591,11 +591,11 @@ where
             .elapsed()
             .map_err(Error::coin_select)?;
 
-        // Find outpoints for each boarding address.
-        for boarding_address in boarding_addresses {
+        // Find outpoints for each boarding output.
+        for boarding_output in boarding_outputs {
             let outpoints = self
                 .blockchain()
-                .find_outpoints(boarding_address.address())
+                .find_outpoints(boarding_output.address())
                 .await?;
 
             for o in outpoints.iter() {
@@ -606,11 +606,11 @@ where
                 } = o
                 {
                     let exit_path_time = Duration::from_secs(*confirmation_blocktime)
-                        + boarding_address.exit_delay_duration();
+                        + boarding_output.exit_delay_duration();
 
                     // Only include confirmed boarding outputs with an _inactive_ exit path.
                     if now < exit_path_time {
-                        boarding_inputs.push((*outpoint, boarding_address.clone()));
+                        boarding_inputs.push((*outpoint, boarding_output.clone()));
                         total_amount += *amount;
                     }
                 }
@@ -1021,7 +1021,7 @@ where
 
                                         let (sig, pk) = {
                                             let wallet = self.inner.wallet().await;
-                                            wallet.sign_boarding_address(boarding_output, &msg)?
+                                            wallet.sign_boarding_output(boarding_output, &msg)?
                                         };
 
                                         self.secp()

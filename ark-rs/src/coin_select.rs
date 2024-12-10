@@ -80,7 +80,7 @@ where
     W: BoardingWallet + OnchainWallet,
 {
     let wallet = client.inner.wallet().await;
-    let boarding_outputs = wallet.get_boarding_addresses()?;
+    let boarding_outputs = wallet.get_boarding_outputs()?;
 
     let now = std::time::UNIX_EPOCH
         .elapsed()
@@ -111,8 +111,8 @@ where
                 let spendable_at = Duration::from_secs(*confirmation_blocktime)
                     + boarding_output.exit_delay_duration();
 
-                // For each confirmed outpoint, check if they can already be spent unilaterally using
-                // the exit path.
+                // For each confirmed outpoint, check if they can already be spent unilaterally
+                // using the exit path.
                 if spendable_at <= now {
                     tracing::debug!(?outpoint, %amount, ?boarding_output, "Selected boarding output");
 
@@ -149,8 +149,8 @@ where
                 let spendable_at =
                     Duration::from_secs(*confirmation_blocktime) + vtxo.exit_delay_duration();
 
-                // For each confirmed outpoint, check if they can already be spent unilaterally using
-                // the exit path.
+                // For each confirmed outpoint, check if they can already be spent unilaterally
+                // using the exit path.
                 if spendable_at <= now {
                     tracing::debug!(?outpoint, %amount, ?vtxo, "Selected VTXO");
 
