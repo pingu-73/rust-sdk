@@ -126,10 +126,10 @@ pub struct ExplorerUtxo {
 }
 
 pub trait Blockchain {
-    fn find_outpoint(
+    fn find_outpoints(
         &self,
         address: &Address,
-    ) -> impl std::future::Future<Output = Result<Option<ExplorerUtxo>, Error>> + Send;
+    ) -> impl std::future::Future<Output = Result<Vec<ExplorerUtxo>, Error>> + Send;
 
     fn find_tx(
         &self,
@@ -562,22 +562,26 @@ where
 
         // Find outpoints for each boarding address.
         for boarding_address in boarding_addresses {
-            if let Some(ExplorerUtxo {
-                outpoint,
-                amount,
-                confirmation_blocktime: Some(confirmation_blocktime),
-            }) = self
+            let outpoints = self
                 .blockchain()
-                .find_outpoint(boarding_address.address())
-                .await?
-            {
-                let exit_path_time = Duration::from_secs(confirmation_blocktime)
-                    + boarding_address.exit_delay_duration();
+                .find_outpoints(boarding_address.address())
+                .await?;
 
-                // Only include confirmed boarding outputs with an _inactive_ exit path.
-                if now < exit_path_time {
-                    boarding_inputs.push((outpoint, boarding_address));
-                    total_amount += amount;
+            for o in outpoints.iter() {
+                if let ExplorerUtxo {
+                    outpoint,
+                    amount,
+                    confirmation_blocktime: Some(confirmation_blocktime),
+                } = o
+                {
+                    let exit_path_time = Duration::from_secs(*confirmation_blocktime)
+                        + boarding_address.exit_delay_duration();
+
+                    // Only include confirmed boarding outputs with an _inactive_ exit path.
+                    if now < exit_path_time {
+                        boarding_inputs.push((*outpoint, boarding_address.clone()));
+                        total_amount += *amount;
+                    }
                 }
             }
         }
@@ -642,7 +646,9 @@ where
         let payment_id = self
             .asp_client()
             .register_inputs_for_next_round(ephemeral_kp.public_key(), inputs)
-            .await?;
+            .await
+            .map_err(Error::from)
+            .context("failed to register round inputs")?;
 
         tracing::debug!(payment_id, "Registered for round");
 

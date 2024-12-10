@@ -95,26 +95,30 @@ where
             return Ok((selected_boarding_outputs, Vec::new(), change_amount));
         }
 
-        // Find outpoints for each boarding output.
-        if let Some(ExplorerUtxo {
-            outpoint,
-            amount,
-            confirmation_blocktime: Some(confirmation_blocktime),
-        }) = client
+        let outpoints = client
             .blockchain()
-            .find_outpoint(boarding_output.address())
-            .await?
-        {
-            let spendable_at =
-                Duration::from_secs(confirmation_blocktime) + boarding_output.exit_delay_duration();
+            .find_outpoints(boarding_output.address())
+            .await?;
 
-            // For each confirmed outpoint, check if they can already be spent unilaterally using
-            // the exit path.
-            if spendable_at <= now {
-                tracing::debug!(?outpoint, %amount, ?boarding_output, "Selected boarding output");
+        for o in outpoints.iter() {
+            // Find outpoints for each boarding output.
+            if let ExplorerUtxo {
+                outpoint,
+                amount,
+                confirmation_blocktime: Some(confirmation_blocktime),
+            } = o
+            {
+                let spendable_at = Duration::from_secs(*confirmation_blocktime)
+                    + boarding_output.exit_delay_duration();
 
-                selected_boarding_outputs.push((boarding_output.clone(), outpoint, amount));
-                selected_amount += amount;
+                // For each confirmed outpoint, check if they can already be spent unilaterally using
+                // the exit path.
+                if spendable_at <= now {
+                    tracing::debug!(?outpoint, %amount, ?boarding_output, "Selected boarding output");
+
+                    selected_boarding_outputs.push((boarding_output.clone(), *outpoint, *amount));
+                    selected_amount += *amount;
+                }
             }
         }
     }
@@ -132,23 +136,27 @@ where
             ));
         }
 
-        // Find outpoints for each VTXO.
-        if let Some(ExplorerUtxo {
-            outpoint,
-            amount,
-            confirmation_blocktime: Some(confirmation_blocktime),
-        }) = client.blockchain().find_outpoint(vtxo.address()).await?
-        {
-            let spendable_at =
-                Duration::from_secs(confirmation_blocktime) + vtxo.exit_delay_duration();
+        let outpoints = client.blockchain().find_outpoints(vtxo.address()).await?;
 
-            // For each confirmed outpoint, check if they can already be spent unilaterally using
-            // the exit path.
-            if spendable_at <= now {
-                tracing::debug!(?outpoint, %amount, ?vtxo, "Selected VTXO");
+        for o in outpoints.iter() {
+            // Find outpoints for each VTXO.
+            if let ExplorerUtxo {
+                outpoint,
+                amount,
+                confirmation_blocktime: Some(confirmation_blocktime),
+            } = o
+            {
+                let spendable_at =
+                    Duration::from_secs(*confirmation_blocktime) + vtxo.exit_delay_duration();
 
-                selected_vtxo_outputs.push((vtxo.clone(), outpoint, amount));
-                selected_amount += amount;
+                // For each confirmed outpoint, check if they can already be spent unilaterally using
+                // the exit path.
+                if spendable_at <= now {
+                    tracing::debug!(?outpoint, %amount, ?vtxo, "Selected VTXO");
+
+                    selected_vtxo_outputs.push((vtxo.clone(), *outpoint, *amount));
+                    selected_amount += *amount;
+                }
             }
         }
     }

@@ -47,6 +47,7 @@ pub struct PaymentOutput {
     pub amount: Amount,
 }
 
+#[derive(Debug)]
 pub struct RoundInputs {
     pub outpoint: Option<OutPoint>,
     pub descriptor: String,

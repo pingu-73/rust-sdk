@@ -19,7 +19,6 @@ use bitcoin::OutPoint;
 use bitcoin::Transaction;
 use bitcoin::Txid;
 use regex::Regex;
-use std::collections::HashMap;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -27,8 +26,6 @@ use std::sync::Once;
 use tokio::sync::Mutex;
 
 pub struct Nigiri {
-    // FIXME: Do we really need this cache?
-    utxos: Mutex<HashMap<Address, ExplorerUtxo>>,
     esplora_client: esplora_client::BlockingClient,
 }
 
@@ -37,10 +34,7 @@ impl Nigiri {
         let builder = esplora_client::Builder::new("http://localhost:30000");
         let esplora_client = builder.build_blocking();
 
-        Self {
-            utxos: Mutex::new(HashMap::new()),
-            esplora_client,
-        }
+        Self { esplora_client }
     }
 
     pub async fn faucet_fund(&self, address: &Address, amount: Amount) -> OutPoint {
@@ -83,21 +77,13 @@ impl Nigiri {
             .find(|(_, o)| o.script_pubkey == address.script_pubkey())
             .unwrap();
 
-        let point = OutPoint {
+        // Wait for output to be confirmed.
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        OutPoint {
             txid,
             vout: vout as u32,
-        };
-        let mut guard = self.utxos.lock().await;
-        guard.insert(
-            address.clone(),
-            ExplorerUtxo {
-                outpoint: point,
-                amount,
-                confirmation_blocktime: None,
-            },
-        );
-
-        point
+        }
     }
 
     async fn _mine(&self, n: u32) {
@@ -120,40 +106,52 @@ impl Default for Nigiri {
 }
 
 impl Blockchain for Nigiri {
-    async fn find_outpoint(&self, address: &Address) -> Result<Option<ExplorerUtxo>, Error> {
-        let guard = self.utxos.lock().await;
-        let value = guard.get(address);
-        if let Some(ExplorerUtxo {
-            outpoint, amount, ..
-        }) = value
-        {
-            let option = self
+    async fn find_outpoints(&self, address: &Address) -> Result<Vec<ExplorerUtxo>, Error> {
+        let script_pubkey = address.script_pubkey();
+        let txs = self
+            .esplora_client
+            .scripthash_txs(&script_pubkey, None)
+            .unwrap();
+
+        let outputs = txs
+            .into_iter()
+            .flat_map(|tx| {
+                let txid = tx.txid;
+                let confirmation_blocktime = tx.status.block_time;
+                tx.vout
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, v)| v.scriptpubkey == script_pubkey)
+                    .map(|(i, v)| ExplorerUtxo {
+                        outpoint: OutPoint {
+                            txid,
+                            vout: i as u32,
+                        },
+                        amount: Amount::from_sat(v.value),
+                        confirmation_blocktime,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let mut utxos = Vec::new();
+        for output in outputs.iter() {
+            let outpoint = output.outpoint;
+            let status = self
                 .esplora_client
                 .get_output_status(&outpoint.txid, outpoint.vout as u64)
                 .unwrap();
-            match option {
-                None => {
-                    tracing::error!("No status for outpoint, taking cached results instead");
-                }
-                Some(status) => {
-                    tracing::debug!(?status, "Status of outpoint");
 
-                    if status.spent {
-                        return Ok(None);
-                    } else {
-                        let explorer_utxo = ExplorerUtxo {
-                            outpoint: *outpoint,
-                            amount: *amount,
-                            confirmation_blocktime: status.status.and_then(|s| s.block_time),
-                        };
-
-                        return Ok(Some(explorer_utxo));
-                    }
+            match status {
+                Some(esplora_client::OutputStatus { spent: false, .. }) | None => {
+                    utxos.push(*output);
                 }
+                // Ignore spent transaction outputs
+                Some(esplora_client::OutputStatus { spent: true, .. }) => {}
             }
         }
 
-        Ok(value.copied())
+        Ok(utxos)
     }
 
     async fn find_tx(&self, txid: &Txid) -> Result<Option<Transaction>, Error> {

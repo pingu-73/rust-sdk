@@ -58,16 +58,19 @@ pub async fn multi_party_e2e() {
     let bob_boarding_address = new_boarding_address(&bob, &bob_wallet).await;
     let claire_boarding_address = new_boarding_address(&claire, &claire_wallet).await;
 
+    let alice_initial_balance = Amount::ONE_BTC;
     let alice_boarding_output = nigiri
-        .faucet_fund(alice_boarding_address.address(), Amount::ONE_BTC)
+        .faucet_fund(alice_boarding_address.address(), alice_initial_balance)
         .await;
 
     let bob_initial_balance = Amount::ONE_BTC;
     let bob_boarding_output = nigiri
         .faucet_fund(bob_boarding_address.address(), bob_initial_balance)
         .await;
+
+    let claire_initial_balance = Amount::ONE_BTC;
     let claire_boarding_output = nigiri
-        .faucet_fund(claire_boarding_address.address(), Amount::ONE_BTC)
+        .faucet_fund(claire_boarding_address.address(), claire_initial_balance)
         .await;
 
     tracing::debug!("Boarding output alice: {alice_boarding_output:?}");
