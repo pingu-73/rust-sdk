@@ -7,6 +7,7 @@ use ark_rs::wallet::BoardingWallet;
 use ark_rs::wallet::Persistence;
 use ark_rs::Blockchain;
 use ark_rs::Client;
+use ark_rs::ExplorerUtxo;
 use ark_rs::OfflineClient;
 use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
@@ -166,10 +167,12 @@ async fn new_boarding_address(
 }
 
 struct Nigiri {
-    utxos: Mutex<HashMap<Address, (OutPoint, Amount)>>,
+    // FIXME: Do we really need this cache?
+    utxos: Mutex<HashMap<Address, ExplorerUtxo>>,
     esplora_client: esplora_client::BlockingClient,
 }
 
+// FIXME: Only have a single implementation of these traits!
 impl Nigiri {
     pub fn new() -> Self {
         let builder = esplora_client::Builder::new("http://localhost:30000");
@@ -226,7 +229,14 @@ impl Nigiri {
             vout: vout as u32,
         };
         let mut guard = self.utxos.lock().await;
-        guard.insert(address.clone(), (point, amount));
+        guard.insert(
+            address.clone(),
+            ExplorerUtxo {
+                outpoint: point,
+                amount,
+                confirmation_blocktime: None,
+            },
+        );
 
         point
     }
@@ -245,10 +255,13 @@ impl Nigiri {
 }
 
 impl Blockchain for Nigiri {
-    async fn find_outpoint(&self, address: &Address) -> Result<Option<(OutPoint, Amount)>, Error> {
+    async fn find_outpoint(&self, address: &Address) -> Result<Option<ExplorerUtxo>, Error> {
         let guard = self.utxos.lock().await;
         let value = guard.get(address);
-        if let Some((outpoint, _amount)) = value {
+        if let Some(ExplorerUtxo {
+            outpoint, amount, ..
+        }) = value
+        {
             let option = self
                 .esplora_client
                 .get_output_status(&outpoint.txid, outpoint.vout as u64)

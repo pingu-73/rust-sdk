@@ -5,6 +5,7 @@ use crate::UNSPENDABLE_KEY;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
 use bitcoin::key::Verification;
+use bitcoin::relative;
 use bitcoin::taproot;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
@@ -13,7 +14,9 @@ use bitcoin::Address;
 use bitcoin::Network;
 use bitcoin::ScriptBuf;
 use bitcoin::XOnlyPublicKey;
+use std::time::Duration;
 
+// FIXME: Rename everywhere from "boarding address" to "boarding output".
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoardingOutput {
     asp: XOnlyPublicKey,
@@ -21,6 +24,7 @@ pub struct BoardingOutput {
     spend_info: TaprootSpendInfo,
     address: Address,
     ark_descriptor: String,
+    exit_delay: bitcoin::Sequence,
 }
 
 impl BoardingOutput {
@@ -61,6 +65,7 @@ impl BoardingOutput {
             spend_info,
             address,
             ark_descriptor,
+            exit_delay,
         }
     }
 
@@ -87,7 +92,40 @@ impl BoardingOutput {
         (forfeit_script, control_block)
     }
 
+    pub fn exit_spend_info(&self) -> (ScriptBuf, taproot::ControlBlock) {
+        let exit_script = self.exit_script();
+
+        let control_block = self
+            .spend_info
+            .control_block(&(exit_script.clone(), LeafVersion::TapScript))
+            .expect("exit script");
+
+        (exit_script, control_block)
+    }
+
+    pub fn exit_delay(&self) -> bitcoin::Sequence {
+        self.exit_delay
+    }
+
+    pub fn exit_delay_duration(&self) -> Duration {
+        let exit_delay = self
+            .exit_delay
+            .to_relative_lock_time()
+            .expect("relative lock time");
+
+        match exit_delay {
+            relative::LockTime::Time(time) => Duration::from_secs(time.value() as u64 * 512),
+            relative::LockTime::Blocks(_) => {
+                unreachable!("Only seconds timelock is supported");
+            }
+        }
+    }
+
     fn forfeit_script(&self) -> ScriptBuf {
         multisig_script(self.asp, self.owner)
+    }
+
+    fn exit_script(&self) -> ScriptBuf {
+        csv_sig_script(self.exit_delay, self.owner)
     }
 }

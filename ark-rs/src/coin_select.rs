@@ -1,6 +1,15 @@
 use crate::asp::VtxoOutPoint;
+use crate::boarding_output::BoardingOutput;
+use crate::default_vtxo::DefaultVtxo;
 use crate::error::Error;
+use crate::wallet::BoardingWallet;
+use crate::wallet::OnchainWallet;
+use crate::Blockchain;
+use crate::Client;
+use crate::ExplorerUtxo;
 use bitcoin::Amount;
+use bitcoin::OutPoint;
+use std::time::Duration;
 
 /// Select VTXOs to be used as inputs in Out-Of-Round transactions.
 pub fn coin_select_for_oor(
@@ -45,6 +54,118 @@ pub fn coin_select_for_oor(
     }
 
     Ok((selected, change))
+}
+
+/// Select boarding outputs and VTXOs to be used as inputs in onchain transactions, exiting the Ark
+/// ecosystem.
+///
+/// This function prioritizes boarding outputs over VTXOs. That is, we may not select any VTXOs if
+/// the `target_amount` is covered using only boarding outputs.
+///
+/// TODO: We should use a coin selection algorithm that takes into account fees e.g.
+/// https://github.com/bitcoindevkit/coin-select.
+pub async fn coin_select_for_onchain<B, W>(
+    client: &Client<B, W>,
+    target_amount: Amount,
+) -> Result<
+    (
+        Vec<(BoardingOutput, OutPoint, Amount)>,
+        Vec<(DefaultVtxo, OutPoint, Amount)>,
+        Amount,
+    ),
+    Error,
+>
+where
+    B: Blockchain,
+    W: BoardingWallet + OnchainWallet,
+{
+    let wallet = client.inner.wallet().await;
+    let boarding_outputs = wallet.get_boarding_addresses()?;
+
+    let now = std::time::UNIX_EPOCH
+        .elapsed()
+        .map_err(Error::coin_select)?;
+
+    let mut selected_boarding_outputs = Vec::new();
+    let mut selected_amount = Amount::ZERO;
+
+    for boarding_output in boarding_outputs.iter() {
+        if target_amount <= selected_amount {
+            let change_amount = selected_amount - target_amount;
+            return Ok((selected_boarding_outputs, Vec::new(), change_amount));
+        }
+
+        // Find outpoints for each boarding output.
+        if let Some(ExplorerUtxo {
+            outpoint,
+            amount,
+            confirmation_blocktime: Some(confirmation_blocktime),
+        }) = client
+            .blockchain()
+            .find_outpoint(boarding_output.address())
+            .await?
+        {
+            let spendable_at =
+                Duration::from_secs(confirmation_blocktime) + boarding_output.exit_delay_duration();
+
+            // For each confirmed outpoint, check if they can already be spent unilaterally using
+            // the exit path.
+            if spendable_at <= now {
+                tracing::debug!(?outpoint, %amount, ?boarding_output, "Selected boarding output");
+
+                selected_boarding_outputs.push((boarding_output.clone(), outpoint, amount));
+                selected_amount += amount;
+            }
+        }
+    }
+
+    let mut selected_vtxo_outputs = Vec::new();
+
+    for (_, vtxo) in client.get_offchain_addresses() {
+        if target_amount <= selected_amount {
+            let change_amount = selected_amount - target_amount;
+
+            return Ok((
+                selected_boarding_outputs,
+                selected_vtxo_outputs,
+                change_amount,
+            ));
+        }
+
+        // Find outpoints for each VTXO.
+        if let Some(ExplorerUtxo {
+            outpoint,
+            amount,
+            confirmation_blocktime: Some(confirmation_blocktime),
+        }) = client.blockchain().find_outpoint(vtxo.address()).await?
+        {
+            let spendable_at =
+                Duration::from_secs(confirmation_blocktime) + vtxo.exit_delay_duration();
+
+            // For each confirmed outpoint, check if they can already be spent unilaterally using
+            // the exit path.
+            if spendable_at <= now {
+                tracing::debug!(?outpoint, %amount, ?vtxo, "Selected VTXO");
+
+                selected_vtxo_outputs.push((vtxo.clone(), outpoint, amount));
+                selected_amount += amount;
+            }
+        }
+    }
+
+    if selected_amount < target_amount {
+        return Err(Error::coin_select(format!(
+            "insufficient funds: selected = {selected_amount}, needed = {target_amount}"
+        )));
+    }
+
+    let change_amount = selected_amount - target_amount;
+
+    Ok((
+        selected_boarding_outputs,
+        selected_vtxo_outputs,
+        change_amount,
+    ))
 }
 
 // Tests for the coin selection function

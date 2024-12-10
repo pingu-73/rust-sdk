@@ -8,6 +8,7 @@ use crate::asp::RoundStreamEvent;
 use crate::asp::Tree;
 use crate::asp::VtxoOutPoint;
 use crate::boarding_output::BoardingOutput;
+use crate::coin_select::coin_select_for_onchain;
 use crate::coin_select::coin_select_for_oor;
 use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
@@ -117,11 +118,18 @@ enum RoundOutputType {
     },
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ExplorerUtxo {
+    pub outpoint: OutPoint,
+    pub amount: Amount,
+    pub confirmation_blocktime: Option<u64>,
+}
+
 pub trait Blockchain {
     fn find_outpoint(
         &self,
         address: &Address,
-    ) -> impl std::future::Future<Output = Result<Option<(OutPoint, Amount)>, Error>> + Send;
+    ) -> impl std::future::Future<Output = Result<Option<ExplorerUtxo>, Error>> + Send;
 
     fn find_tx(
         &self,
@@ -170,6 +178,10 @@ where
             inner: self,
             asp_info,
         })
+    }
+
+    pub(crate) async fn wallet(&self) -> MutexGuard<W> {
+        self.wallet.lock().await
     }
 }
 
@@ -293,10 +305,177 @@ where
         Ok(())
     }
 
-    // TODO: SendOffChain, to an off-chain address, using off-chain funds (VTXOs, boarding
-    // outputs...).
+    /// Spend boarding outputs and VTXOs to an _onchain_ address.
+    ///
+    /// All these outputs are spent unilaterally.
+    ///
+    /// To be able to spend a boarding output, we must wait for the exit delay to pass.
+    ///
+    /// To be able to spend a VTXO, the VTXO itself must be published on-chain (via something like
+    /// `unilateral_off_board`), and then we must wait for the exit delay to pass.
+    pub async fn send_on_chain(
+        &self,
+        to_address: Address,
+        to_amount: Amount,
+    ) -> Result<Txid, Error> {
+        if to_amount < self.asp_info.dust {
+            return Err(Error::ad_hoc(format!(
+                "invalid amount {to_amount}, must be greater than dust: {}",
+                self.asp_info.dust,
+            )));
+        }
 
-    // TODO: SendOnChain: to an on-chain address, using on-chain funds.
+        // TODO: Do not use an arbitrary fee.
+        let fee = Amount::from_sat(1_000);
+
+        let (selected_boarding_outputs, selected_vtxos, change_amount) =
+            coin_select_for_onchain(self, to_amount + fee).await?;
+
+        let mut output = vec![TxOut {
+            value: to_amount,
+            script_pubkey: to_address.script_pubkey(),
+        }];
+
+        if change_amount != Amount::ZERO {
+            let change_address = self.inner.wallet().await.get_onchain_address()?;
+
+            output.push(TxOut {
+                value: change_amount,
+                script_pubkey: change_address.script_pubkey(),
+            });
+        }
+
+        let mut input = Vec::new();
+
+        for (boarding_output, outpoint, _) in selected_boarding_outputs.iter() {
+            let boarding_input = TxIn {
+                previous_output: *outpoint,
+                sequence: boarding_output.exit_delay(),
+                ..Default::default()
+            };
+
+            input.push(boarding_input);
+        }
+
+        for (vtxo, outpoint, _) in selected_vtxos.iter() {
+            let vtxo_input = TxIn {
+                previous_output: *outpoint,
+                sequence: vtxo.exit_delay(),
+                ..Default::default()
+            };
+
+            input.push(vtxo_input);
+        }
+
+        let mut psbt = Psbt::from_unsigned_tx(Transaction {
+            version: transaction::Version::TWO,
+            lock_time: LockTime::ZERO,
+            input,
+            output,
+        })
+        .map_err(Error::transaction)?;
+
+        // Add a `witness_utxo` for every transaction input.
+        for (i, input) in psbt.inputs.iter_mut().enumerate() {
+            let outpoint = psbt.unsigned_tx.input[i].previous_output;
+
+            let txout = selected_boarding_outputs
+                .iter()
+                .find_map(|(boarding_output, o, amount)| {
+                    (*o == outpoint).then_some(TxOut {
+                        value: *amount,
+                        script_pubkey: boarding_output.address().script_pubkey(),
+                    })
+                })
+                .or_else(|| {
+                    selected_vtxos.iter().find_map(|(vtxo, o, amount)| {
+                        (*o == outpoint).then_some(TxOut {
+                            value: *amount,
+                            script_pubkey: vtxo.address().script_pubkey(),
+                        })
+                    })
+                })
+                .expect("txout for input");
+
+            input.witness_utxo = Some(txout);
+        }
+
+        // Collect all `witness_utxo` entries.
+        let prevouts = psbt
+            .inputs
+            .iter()
+            .filter_map(|i| i.witness_utxo.clone())
+            .collect::<Vec<_>>();
+        let prevouts = Prevouts::All(&prevouts);
+
+        // Sign each input.
+        for (i, input) in psbt.inputs.iter_mut().enumerate() {
+            let outpoint = psbt.unsigned_tx.input[i].previous_output;
+
+            let (exit_script, exit_control_block) = selected_boarding_outputs
+                .iter()
+                .find_map(|(boarding_output, o, _)| {
+                    (*o == outpoint).then(|| boarding_output.exit_spend_info())
+                })
+                .or_else(|| {
+                    selected_vtxos
+                        .iter()
+                        .find_map(|(vtxo, o, _)| (*o == outpoint).then(|| vtxo.exit_spend_info()))
+                })
+                .expect("spend info for input");
+
+            let leaf_version = exit_control_block.leaf_version;
+            let leaf_hash = TapLeafHash::from_script(&exit_script, leaf_version);
+
+            let tap_sighash = SighashCache::new(&psbt.unsigned_tx)
+                .taproot_script_spend_signature_hash(
+                    i,
+                    &prevouts,
+                    leaf_hash,
+                    TapSighashType::Default,
+                )
+                .map_err(Error::crypto)?;
+
+            let msg = secp256k1::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
+
+            let sig = self.secp().sign_schnorr_no_aux_rand(&msg, self.kp());
+            let pk = self.kp().x_only_public_key().0;
+
+            self.secp()
+                .verify_schnorr(&sig, &msg, &pk)
+                .map_err(Error::crypto)
+                .context("failed to verify own signature")?;
+
+            let sig = taproot::Signature {
+                signature: sig,
+                sighash_type: TapSighashType::Default,
+            };
+
+            input.tap_scripts = BTreeMap::from_iter([(
+                exit_control_block.clone(),
+                (exit_script.clone(), leaf_version),
+            )]);
+            input.sighash_type = Some(TapSighashType::Default.into());
+            input.tap_script_sigs = BTreeMap::from_iter([((pk, leaf_hash), sig)]);
+        }
+
+        let tx = psbt.clone().extract_tx().map_err(Error::transaction)?;
+
+        let txid = tx.compute_txid();
+        tracing::info!(
+            %txid,
+            ?selected_boarding_outputs,
+            ?selected_vtxos,
+            "Broadcasting transaction sending Ark outputs onchain"
+        );
+
+        self.blockchain()
+            .broadcast(&tx)
+            .await
+            .context("failed to broadcast transaction {tx}")?;
+
+        Ok(txid)
+    }
 
     // In go client: CollaborativeRedeem.
     pub async fn off_board<R>(
@@ -370,23 +549,36 @@ where
     > {
         // Get all known boarding addresses.
         let boarding_addresses = {
-            let wallet = self.wallet().await;
+            let wallet = self.inner.wallet().await;
             wallet.get_boarding_addresses()?
         };
 
         let mut boarding_inputs: Vec<(OutPoint, BoardingOutput)> = Vec::new();
         let mut total_amount = Amount::ZERO;
 
+        let now = std::time::UNIX_EPOCH
+            .elapsed()
+            .map_err(Error::coin_select)?;
+
         // Find outpoints for each boarding address.
         for boarding_address in boarding_addresses {
-            if let Some((outpoint, amount)) = self
+            if let Some(ExplorerUtxo {
+                outpoint,
+                amount,
+                confirmation_blocktime: Some(confirmation_blocktime),
+            }) = self
                 .blockchain()
                 .find_outpoint(boarding_address.address())
                 .await?
             {
-                // TODO: Filter out expired boarding inputs.
-                boarding_inputs.push((outpoint, boarding_address));
-                total_amount += amount;
+                let exit_path_time = Duration::from_secs(confirmation_blocktime)
+                    + boarding_address.exit_delay_duration();
+
+                // Only include confirmed boarding outputs with an _inactive_ exit path.
+                if now < exit_path_time {
+                    boarding_inputs.push((outpoint, boarding_address));
+                    total_amount += amount;
+                }
             }
         }
 
@@ -791,7 +983,7 @@ where
                                         );
 
                                         let (sig, pk) = {
-                                            let wallet = self.wallet().await;
+                                            let wallet = self.inner.wallet().await;
                                             wallet.sign_boarding_address(boarding_output, &msg)?
                                         };
 
@@ -1357,9 +1549,5 @@ where
 
     fn blockchain(&self) -> &B {
         &self.inner.blockchain
-    }
-
-    async fn wallet(&self) -> MutexGuard<W> {
-        self.inner.wallet.lock().await
     }
 }
