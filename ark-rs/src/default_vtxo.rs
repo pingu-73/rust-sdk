@@ -5,7 +5,7 @@ use crate::UNSPENDABLE_KEY;
 use bitcoin::key::PublicKey;
 use bitcoin::key::Secp256k1;
 use bitcoin::key::Verification;
-use bitcoin::relative::LockTime;
+use bitcoin::relative;
 use bitcoin::taproot;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
@@ -14,8 +14,8 @@ use bitcoin::Address;
 use bitcoin::Network;
 use bitcoin::ScriptBuf;
 use bitcoin::XOnlyPublicKey;
+use std::time::Duration;
 
-/// tr(unspendable, { and(pk(user), pk(asp)), and(older(timeout), pk(user)) })
 const DEFAULT_VTXO_DESCRIPTOR_TEMPLATE: &str =
     "tr(UNSPENDABLE_KEY,{and(pk(USER),pk(ASP)),and(older(TIMEOUT),pk(USER))})";
 
@@ -26,6 +26,8 @@ pub struct DefaultVtxo {
     spend_info: TaprootSpendInfo,
     ark_descriptor: String,
     address: Address,
+    exit_delay: bitcoin::Sequence,
+    exit_delay_seconds: u64,
 }
 
 impl DefaultVtxo {
@@ -45,7 +47,6 @@ impl DefaultVtxo {
         let forfeit_script = multisig_script(asp, owner);
         let redeem_script = csv_sig_script(exit_delay, owner);
 
-        // TODO: Order of leaves could be wrong now.
         let spend_info = TaprootBuilder::new()
             .add_leaf(1, forfeit_script)
             .expect("valid forfeit leaf")
@@ -55,7 +56,7 @@ impl DefaultVtxo {
             .expect("can be finalized");
 
         let exit_delay_seconds = match exit_delay.to_relative_lock_time() {
-            Some(LockTime::Time(time)) => time.value() * 512,
+            Some(relative::LockTime::Time(time)) => time.value() * 512,
             _ => unreachable!("default VTXO redeem script must use relative lock time in seconds"),
         };
         let ark_descriptor = DEFAULT_VTXO_DESCRIPTOR_TEMPLATE
@@ -73,6 +74,8 @@ impl DefaultVtxo {
             spend_info,
             ark_descriptor,
             address,
+            exit_delay,
+            exit_delay_seconds: exit_delay_seconds as u64,
         }
     }
 
@@ -86,6 +89,18 @@ impl DefaultVtxo {
 
     pub fn script_pubkey(&self) -> ScriptBuf {
         self.address.script_pubkey()
+    }
+
+    pub fn address(&self) -> &Address {
+        &self.address
+    }
+
+    pub fn exit_delay(&self) -> bitcoin::Sequence {
+        self.exit_delay
+    }
+
+    pub fn exit_delay_duration(&self) -> Duration {
+        Duration::from_secs(self.exit_delay_seconds)
     }
 
     pub fn forfeit_spend_info(&self) -> (ScriptBuf, taproot::ControlBlock) {
@@ -102,7 +117,22 @@ impl DefaultVtxo {
         (forfeit_script, control_block)
     }
 
+    pub fn exit_spend_info(&self) -> (ScriptBuf, taproot::ControlBlock) {
+        let exit_script = self.exit_script();
+
+        let control_block = self
+            .spend_info
+            .control_block(&(exit_script.clone(), LeafVersion::TapScript))
+            .expect("exit script");
+
+        (exit_script, control_block)
+    }
+
     fn forfeit_script(&self) -> ScriptBuf {
         multisig_script(self.asp, self.owner)
+    }
+
+    fn exit_script(&self) -> ScriptBuf {
+        csv_sig_script(self.exit_delay, self.owner)
     }
 }

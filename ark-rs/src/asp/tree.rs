@@ -1,5 +1,3 @@
-// TODO: Find a better name for this module.
-
 use crate::asp::Error;
 use bitcoin::hex::FromHex;
 use std::io;

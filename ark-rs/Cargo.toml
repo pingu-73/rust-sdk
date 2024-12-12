@@ -11,23 +11,13 @@ async-stream = "0.3"
 base64 = "0.22.1"
 bech32 = "0.11"
 bitcoin = { version = "0.32.4", features = ["rand"] }
-esplora-client = { version = "0.10.0", features = ["async-https", "blocking-https"] }
 futures = "0.3.31"
 prost = "0.13.3"
 rand = "0.8.5"
 tokio = { version = "1.41.0", features = ["full"] }
 tonic = "0.12.3"
 tracing = "0.1.37"
-tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "env-filter", "time", "tracing-log", "json"] }
 zkp = { package = "secp256k1-zkp", git = "https://github.com/sanket1729/rust-secp256k1-zkp.git", rev = "60e631c24588a0c9e271badd61959294848c665d", features = ["serde", "rand-std"] }
-
-# TODO: it sucks that this has to be in dependencies. It's because dev dependencies are not available in the
-# integration tests. wWe should make this project a cargo workspace and move the wallet into an own crate.
-bdk_esplora = "0.19.0"
-bdk_wallet = "1.0.0-beta.5"
-
-[dev-dependencies]
-regex = "*"
 
 [target.'cfg(genproto)'.build-dependencies]
 tonic-build = { version = "0.12.3" }

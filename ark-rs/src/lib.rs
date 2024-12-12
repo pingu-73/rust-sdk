@@ -8,7 +8,8 @@ use crate::asp::RoundStreamEvent;
 use crate::asp::Tree;
 use crate::asp::VtxoOutPoint;
 use crate::boarding_output::BoardingOutput;
-use crate::coinselect::coin_select;
+use crate::coin_select::coin_select_for_onchain;
+use crate::coin_select::coin_select_for_oor;
 use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
 use crate::default_vtxo::DefaultVtxo;
@@ -20,6 +21,7 @@ use crate::wallet::BoardingWallet;
 use crate::wallet::OnchainWallet;
 use bitcoin::absolute::LockTime;
 use bitcoin::hashes::Hash;
+use bitcoin::hex::DisplayHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::Secp256k1;
 use bitcoin::relative;
@@ -79,14 +81,11 @@ pub mod default_vtxo;
 pub mod error;
 pub mod wallet;
 
-mod coinselect;
+mod coin_select;
 mod conversions;
 mod forfeit_fee;
 mod internal_node;
 mod script;
-
-// TODO: Figure out how to integrate on-chain wallet. Probably use a trait and implement using
-// `bdk`.
 
 const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
 
@@ -120,11 +119,18 @@ enum RoundOutputType {
     },
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ExplorerUtxo {
+    pub outpoint: OutPoint,
+    pub amount: Amount,
+    pub confirmation_blocktime: Option<u64>,
+}
+
 pub trait Blockchain {
-    fn find_outpoint(
+    fn find_outpoints(
         &self,
         address: &Address,
-    ) -> impl std::future::Future<Output = Result<Option<(OutPoint, Amount)>, Error>> + Send;
+    ) -> impl std::future::Future<Output = Result<Vec<ExplorerUtxo>, Error>> + Send;
 
     fn find_tx(
         &self,
@@ -173,6 +179,10 @@ where
             inner: self,
             asp_info,
         })
+    }
+
+    pub(crate) async fn wallet(&self) -> MutexGuard<W> {
+        self.wallet.lock().await
     }
 }
 
@@ -233,7 +243,7 @@ where
         Ok(spendable)
     }
 
-    // In go client: Balance (minus the on-chain balance, TODO).
+    // In go client: Balance.
     pub async fn offchain_balance(&self) -> Result<Amount, Error> {
         let list = self.spendable_vtxos().await?;
         let sum = list
@@ -265,8 +275,8 @@ where
 
         // Joining a round is likely to fail depending on the timing, so we keep retrying.
         //
-        // TODO: Consider not retrying on all errors. ATM the retry mechanism is way too quick as
-        // well. We should use backoff and only retry on ephemeral errors.
+        // TODO: Consider not retrying on all errors. We should use backoff and only retry on
+        // ephemeral errors.
         let txid = loop {
             match self
                 .join_next_ark_round(
@@ -296,10 +306,207 @@ where
         Ok(())
     }
 
-    // TODO: SendOffChain, to an off-chain address, using off-chain funds (VTXOs, boarding
-    // outputs...).
+    /// Spend boarding outputs and VTXOs to an _onchain_ address.
+    ///
+    /// All these outputs are spent unilaterally.
+    ///
+    /// To be able to spend a boarding output, we must wait for the exit delay to pass.
+    ///
+    /// To be able to spend a VTXO, the VTXO itself must be published on-chain (via something like
+    /// `unilateral_off_board`), and then we must wait for the exit delay to pass.
+    pub async fn send_on_chain(
+        &self,
+        to_address: Address,
+        to_amount: Amount,
+    ) -> Result<Txid, Error> {
+        let (tx, _) = self
+            .create_send_on_chain_transaction(to_address, to_amount)
+            .await?;
 
-    // TODO: SendOnChain: to an on-chain address, using on-chain funds.
+        let txid = tx.compute_txid();
+        tracing::info!(
+            %txid,
+            "Broadcasting transaction sending Ark outputs onchain"
+        );
+
+        self.blockchain()
+            .broadcast(&tx)
+            .await
+            .context("failed to broadcast transaction {tx}")?;
+
+        Ok(txid)
+    }
+
+    /// Helper function to `send_off_chain`.
+    ///
+    /// We extract this and keep it as part of the public API to be able to test the resulting
+    /// transaction in the e2e tests without needing to wait for a long time.
+    ///
+    /// TODO: Obviously, it's bad to have this as part of the public API. Do something about it!
+    pub async fn create_send_on_chain_transaction(
+        &self,
+        to_address: Address,
+        to_amount: Amount,
+    ) -> Result<(Transaction, Vec<TxOut>), Error> {
+        if to_amount < self.asp_info.dust {
+            return Err(Error::ad_hoc(format!(
+                "invalid amount {to_amount}, must be greater than dust: {}",
+                self.asp_info.dust,
+            )));
+        }
+
+        // TODO: Do not use an arbitrary fee.
+        let fee = Amount::from_sat(1_000);
+
+        let (selected_boarding_outputs, selected_vtxos, change_amount) =
+            coin_select_for_onchain(self, to_amount + fee).await?;
+
+        let mut output = vec![TxOut {
+            value: to_amount,
+            script_pubkey: to_address.script_pubkey(),
+        }];
+
+        if change_amount != Amount::ZERO {
+            let change_address = self.inner.wallet().await.get_onchain_address()?;
+
+            output.push(TxOut {
+                value: change_amount,
+                script_pubkey: change_address.script_pubkey(),
+            });
+        }
+
+        let mut input = Vec::new();
+
+        for (boarding_output, outpoint, _) in selected_boarding_outputs.iter() {
+            let boarding_input = TxIn {
+                previous_output: *outpoint,
+                sequence: boarding_output.exit_delay(),
+                ..Default::default()
+            };
+
+            input.push(boarding_input);
+        }
+
+        for (vtxo, outpoint, _) in selected_vtxos.iter() {
+            let vtxo_input = TxIn {
+                previous_output: *outpoint,
+                sequence: vtxo.exit_delay(),
+                ..Default::default()
+            };
+
+            input.push(vtxo_input);
+        }
+
+        let mut psbt = Psbt::from_unsigned_tx(Transaction {
+            version: transaction::Version::TWO,
+            lock_time: LockTime::ZERO,
+            input,
+            output,
+        })
+        .map_err(Error::transaction)?;
+
+        // Add a `witness_utxo` for every transaction input.
+        for (i, input) in psbt.inputs.iter_mut().enumerate() {
+            let outpoint = psbt.unsigned_tx.input[i].previous_output;
+
+            let txout = selected_boarding_outputs
+                .iter()
+                .find_map(|(boarding_output, o, amount)| {
+                    (*o == outpoint).then_some(TxOut {
+                        value: *amount,
+                        script_pubkey: boarding_output.address().script_pubkey(),
+                    })
+                })
+                .or_else(|| {
+                    selected_vtxos.iter().find_map(|(vtxo, o, amount)| {
+                        (*o == outpoint).then_some(TxOut {
+                            value: *amount,
+                            script_pubkey: vtxo.address().script_pubkey(),
+                        })
+                    })
+                })
+                .expect("txout for input");
+
+            input.witness_utxo = Some(txout);
+        }
+
+        // Collect all `witness_utxo` entries.
+        let prevouts = psbt
+            .inputs
+            .iter()
+            .filter_map(|i| i.witness_utxo.clone())
+            .collect::<Vec<_>>();
+
+        // Sign each input.
+        for (i, input) in psbt.inputs.iter_mut().enumerate() {
+            let outpoint = psbt.unsigned_tx.input[i].previous_output;
+
+            let (exit_script, exit_control_block) = selected_boarding_outputs
+                .iter()
+                .find_map(|(boarding_output, o, _)| {
+                    (*o == outpoint).then(|| boarding_output.exit_spend_info())
+                })
+                .or_else(|| {
+                    selected_vtxos
+                        .iter()
+                        .find_map(|(vtxo, o, _)| (*o == outpoint).then(|| vtxo.exit_spend_info()))
+                })
+                .expect("spend info for input");
+
+            let leaf_version = exit_control_block.leaf_version;
+            let leaf_hash = TapLeafHash::from_script(&exit_script, leaf_version);
+
+            let tap_sighash = SighashCache::new(&psbt.unsigned_tx)
+                .taproot_script_spend_signature_hash(
+                    i,
+                    &Prevouts::All(&prevouts),
+                    leaf_hash,
+                    TapSighashType::Default,
+                )
+                .map_err(Error::crypto)?;
+
+            let msg = secp256k1::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
+
+            let sig = self.secp().sign_schnorr_no_aux_rand(&msg, self.kp());
+            let pk = self.kp().x_only_public_key().0;
+
+            self.secp()
+                .verify_schnorr(&sig, &msg, &pk)
+                .map_err(Error::crypto)
+                .context("failed to verify own signature")?;
+
+            let tap_sig = taproot::Signature {
+                signature: sig,
+                sighash_type: TapSighashType::Default,
+            };
+
+            input.tap_scripts = BTreeMap::from_iter([(
+                exit_control_block.clone(),
+                (exit_script.clone(), leaf_version),
+            )]);
+            input.sighash_type = Some(TapSighashType::Default.into());
+            input.tap_script_sigs = BTreeMap::from_iter([((pk, leaf_hash), tap_sig)]);
+
+            let witness = Witness::from_slice(&[
+                &sig[..],
+                exit_script.as_bytes(),
+                &exit_control_block.serialize(),
+            ]);
+
+            input.final_script_witness = Some(witness);
+        }
+
+        let tx = psbt.clone().extract_tx().map_err(Error::transaction)?;
+
+        tracing::debug!(
+            ?selected_boarding_outputs,
+            ?selected_vtxos,
+            raw_tx = %bitcoin::consensus::serialize(&tx).as_hex(),
+            "Built transaction sending Ark outputs onchain"
+        );
+
+        Ok((tx, prevouts))
+    }
 
     // In go client: CollaborativeRedeem.
     pub async fn off_board<R>(
@@ -330,9 +537,6 @@ where
         );
 
         // Joining a round is likely to fail depending on the timing, so we keep retrying.
-        //
-        // TODO: Consider not retrying on all errors. ATM the retry mechanism is way too quick as
-        // well. We should use backoff and only retry on ephemeral errors.
         let txid = loop {
             match self
                 .join_next_ark_round(
@@ -374,25 +578,42 @@ where
         ),
         Error,
     > {
-        // Get all known boarding addresses.
-        let boarding_addresses = {
-            let wallet = self.wallet().await;
-            wallet.get_boarding_addresses()?
+        // Get all known boarding outputs.
+        let boarding_outputs = {
+            let wallet = self.inner.wallet().await;
+            wallet.get_boarding_outputs()?
         };
 
         let mut boarding_inputs: Vec<(OutPoint, BoardingOutput)> = Vec::new();
         let mut total_amount = Amount::ZERO;
 
-        // Find outpoints for each boarding address.
-        for boarding_address in boarding_addresses {
-            if let Some((outpoint, amount)) = self
+        let now = std::time::UNIX_EPOCH
+            .elapsed()
+            .map_err(Error::coin_select)?;
+
+        // Find outpoints for each boarding output.
+        for boarding_output in boarding_outputs {
+            let outpoints = self
                 .blockchain()
-                .find_outpoint(boarding_address.address())
-                .await?
-            {
-                // TODO: Filter out expired boarding inputs.
-                boarding_inputs.push((outpoint, boarding_address));
-                total_amount += amount;
+                .find_outpoints(boarding_output.address())
+                .await?;
+
+            for o in outpoints.iter() {
+                if let ExplorerUtxo {
+                    outpoint,
+                    amount,
+                    confirmation_blocktime: Some(confirmation_blocktime),
+                } = o
+                {
+                    let exit_path_time = Duration::from_secs(*confirmation_blocktime)
+                        + boarding_output.exit_delay_duration();
+
+                    // Only include confirmed boarding outputs with an _inactive_ exit path.
+                    if now < exit_path_time {
+                        boarding_inputs.push((*outpoint, boarding_output.clone()));
+                        total_amount += *amount;
+                    }
+                }
             }
         }
 
@@ -456,7 +677,9 @@ where
         let payment_id = self
             .asp_client()
             .register_inputs_for_next_round(ephemeral_kp.public_key(), inputs)
-            .await?;
+            .await
+            .map_err(Error::from)
+            .context("failed to register round inputs")?;
 
         tracing::debug!(payment_id, "Registered for round");
 
@@ -668,7 +891,6 @@ where
                                     let input_vout =
                                         tx.input[VTXO_INPUT_INDEX].previous_output.vout as usize;
 
-                                    // TODO: Test the protocol with a larger VTXO tree!
                                     let prevout = if i == 0 {
                                         unsigned_round_tx.clone().unsigned_tx.output[input_vout]
                                             .clone()
@@ -798,8 +1020,8 @@ where
                                         );
 
                                         let (sig, pk) = {
-                                            let wallet = self.wallet().await;
-                                            wallet.sign_boarding_address(boarding_output, &msg)?
+                                            let wallet = self.inner.wallet().await;
+                                            wallet.sign_boarding_output(boarding_output, &msg)?
                                         };
 
                                         self.secp()
@@ -837,7 +1059,6 @@ where
                         }
                         RoundStreamEvent::RoundFailed(e) => {
                             if Some(&e.id) == round_id.as_ref() {
-                                // TODO: Return a different error (and in many, many other places).
                                 return Err(Error::asp(format!(
                                     "failed registering in round {}: {}",
                                     e.id, e.reason
@@ -894,14 +1115,9 @@ where
             .flat_map(|(vtxos, _)| vtxos.clone())
             .collect::<Vec<_>>();
 
-        let (_, selected_coins, change_amount) = coin_select(
-            vec![],
-            spendable_vtxo_outpoints,
-            amount,
-            self.asp_info.dust,
-            true,
-        )
-        .context("failed to select coins")?;
+        let (selected_coins, change_amount) =
+            coin_select_for_oor(spendable_vtxo_outpoints, amount, self.asp_info.dust, true)
+                .context("failed to select coins")?;
 
         let mut change_output = None;
         if change_amount > Amount::ZERO {
@@ -1035,7 +1251,7 @@ where
         Ok(txid)
     }
 
-    // In go client: UnilateralRedeem.
+    /// Publish all the relevant transactions in the VTXO tree to get our VTXOs onchain.
     pub async fn unilateral_off_board(&self) -> Result<(), Error> {
         let spendable_vtxos = self.spendable_vtxos().await?;
 
@@ -1211,7 +1427,7 @@ where
             while let Err(e) = self.blockchain().broadcast(tx).await {
                 tracing::warn!(%txid, "Error broadcasting VTXO transaction: {e:?}");
 
-                // TODO: Should only retry specific errors, but the API is too rough atm.
+                // TODO: Should only retry specific errors.
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
 
@@ -1370,9 +1586,5 @@ where
 
     fn blockchain(&self) -> &B {
         &self.inner.blockchain
-    }
-
-    async fn wallet(&self) -> MutexGuard<W> {
-        self.inner.wallet.lock().await
     }
 }

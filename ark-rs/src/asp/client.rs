@@ -47,13 +47,14 @@ pub struct PaymentOutput {
     pub amount: Amount,
 }
 
+#[derive(Debug)]
 pub struct RoundInputs {
     pub outpoint: Option<OutPoint>,
     pub descriptor: String,
 }
 
 pub struct RoundOutputs {
-    // TODO: would be cool to have a type here which accepts ArkAddress and bitcoin::Address
+    // TODO: Would be cool to have a type here which accepts `ArkAddress` and `bitcoin::Address`.
     pub address: String,
     pub amount: Amount,
 }
