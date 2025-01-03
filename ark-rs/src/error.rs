@@ -26,8 +26,6 @@ enum Kind {
     Transaction(TransactionError),
     /// An error related to coin selection of VTXOs and boarding outputs.
     CoinSelect(CoinSelectError),
-    /// An error related to parsing an Ark address.
-    ParseArkAddress(ParseArkAddressError),
     /// An error related to actions within the wallet
     Wallet(WalletError),
 }
@@ -54,11 +52,6 @@ struct TransactionError {
 
 #[derive(Debug)]
 struct CoinSelectError {
-    source: Source,
-}
-
-#[derive(Debug)]
-struct ParseArkAddressError {
     source: Source,
 }
 
@@ -104,12 +97,6 @@ impl Error {
         }))
     }
 
-    pub(crate) fn parse_ark_address(source: impl Into<Source>) -> Self {
-        Error::new(Kind::ParseArkAddress(ParseArkAddressError {
-            source: source.into(),
-        }))
-    }
-
     pub fn wallet(source: impl Into<Source>) -> Self {
         Error::new(Kind::Wallet(WalletError {
             source: source.into(),
@@ -140,7 +127,6 @@ impl fmt::Display for Kind {
             Kind::Crypto(ref err) => err.fmt(f),
             Kind::Transaction(ref err) => err.fmt(f),
             Kind::CoinSelect(ref err) => err.fmt(f),
-            Kind::ParseArkAddress(ref err) => err.fmt(f),
             Kind::Wallet(ref err) => err.fmt(f),
         }
     }
@@ -171,12 +157,6 @@ impl fmt::Display for TransactionError {
 }
 
 impl fmt::Display for CoinSelectError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.source.fmt(f)
-    }
-}
-
-impl fmt::Display for ParseArkAddressError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.source.fmt(f)
     }

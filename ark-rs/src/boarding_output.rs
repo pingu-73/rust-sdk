@@ -120,6 +120,13 @@ impl BoardingOutput {
         }
     }
 
+    pub fn tapscripts(&self) -> Vec<ScriptBuf> {
+        let (exit_script, _) = self.exit_spend_info();
+        let (forfeit_script, _) = self.forfeit_spend_info();
+
+        vec![exit_script, forfeit_script]
+    }
+
     fn forfeit_script(&self) -> ScriptBuf {
         multisig_script(self.asp, self.owner)
     }

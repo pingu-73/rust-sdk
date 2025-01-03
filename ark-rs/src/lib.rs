@@ -1,7 +1,5 @@
 use crate::ark_address::ArkAddress;
 use crate::asp::ListVtxo;
-use crate::asp::PaymentInput;
-use crate::asp::PaymentOutput;
 use crate::asp::RoundInputs;
 use crate::asp::RoundOutputs;
 use crate::asp::RoundStreamEvent;
@@ -17,6 +15,7 @@ use crate::error::ErrorContext;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::internal_node::VtxoTreeInternalNodeScript;
 use crate::script::extract_sequence_from_csv_sig_script;
+use crate::tx_weight_estimator::compute_redeem_tx_fee;
 use crate::wallet::BoardingWallet;
 use crate::wallet::OnchainWallet;
 use bitcoin::absolute::LockTime;
@@ -33,6 +32,7 @@ use bitcoin::taproot;
 use bitcoin::transaction;
 use bitcoin::Address;
 use bitcoin::Amount;
+use bitcoin::FeeRate;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::TapLeafHash;
@@ -86,6 +86,7 @@ mod conversions;
 mod forfeit_fee;
 mod internal_node;
 mod script;
+pub mod tx_weight_estimator;
 
 const UNSPENDABLE_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
 
@@ -206,8 +207,8 @@ where
             asp_info.network,
         );
 
-        let vtxo_tap_key = &default_vtxo.spend_info().output_key();
-        let ark_address = ArkAddress::new(asp_info.network, asp, vtxo_tap_key.to_inner());
+        let vtxo_tap_key = default_vtxo.spend_info().output_key();
+        let ark_address = ArkAddress::new(asp_info.network, asp, vtxo_tap_key);
 
         (ark_address, default_vtxo)
     }
@@ -658,17 +659,17 @@ where
             let boarding_inputs = boarding_inputs
                 .clone()
                 .into_iter()
-                .map(|(o, d)| RoundInputs {
+                .map(|(o, b)| RoundInputs {
                     outpoint: Some(OutPoint {
                         txid: o.txid,
                         vout: o.vout,
                     }),
-                    descriptor: d.ark_descriptor().to_string(),
+                    tapscripts: b.tapscripts(),
                 });
 
-            let vtxo_inputs = vtxo_inputs.clone().into_iter().map(|(o, d)| RoundInputs {
+            let vtxo_inputs = vtxo_inputs.clone().into_iter().map(|(o, v)| RoundInputs {
                 outpoint: o.outpoint,
-                descriptor: d.ark_descriptor().to_string(),
+                tapscripts: v.tapscripts(),
             });
 
             boarding_inputs.chain(vtxo_inputs).collect()
@@ -1140,42 +1141,74 @@ where
             })
             .collect::<Vec<(_, _)>>();
 
-        let inputs = selected_vtxos
+        let vtxos_for_fee = selected_vtxos
             .iter()
             .map(|(vtxo_outpoint, vtxo)| {
-                let (forfeit_script, control_block) = vtxo.forfeit_spend_info();
+                let (script, control_block) = vtxo.forfeit_spend_info();
 
-                let leaf_hash =
-                    TapLeafHash::from_script(&forfeit_script, control_block.leaf_version);
-
-                PaymentInput {
-                    forfeit_leaf_hash: leaf_hash,
-                    outpoint: vtxo_outpoint.outpoint,
-                    descriptor: vtxo.ark_descriptor().to_string(),
+                tx_weight_estimator::VtxoInput {
+                    outpoint: vtxo_outpoint.outpoint.expect("outpoint"),
+                    amount: vtxo_outpoint.amount,
+                    revealed_script: Some(script),
+                    control_block,
+                    witness_size: DefaultVtxo::FORFEIT_WITNESS_SIZE,
                 }
             })
             .collect::<Vec<_>>();
 
-        let mut outputs = vec![PaymentOutput { address, amount }];
+        let mut outputs = vec![TxOut {
+            value: amount,
+            script_pubkey: address.to_p2tr_script_pubkey(),
+        }];
 
         if let Some((change_address, change_amount)) = change_output {
-            outputs.push(PaymentOutput {
-                address: change_address,
-                amount: change_amount,
+            outputs.push(TxOut {
+                value: change_amount,
+                script_pubkey: change_address.to_p2tr_script_pubkey(),
             })
         }
 
-        let mut signed_redeem_psbt = self
-            .asp_client()
-            .send_payment(inputs, outputs)
-            .await
-            .map_err(Error::asp)
-            .context("failed to send async payment")?;
+        let fee = compute_redeem_tx_fee(
+            FeeRate::from_sat_per_kwu(253),
+            vtxos_for_fee.as_slice(),
+            outputs.len(),
+        )?;
 
-        let prevouts = signed_redeem_psbt
-            .inputs
+        if let Some(change) = outputs.last_mut() {
+            let change_amount = change.value;
+
+            change.value = change_amount.checked_sub(fee).ok_or_else(|| {
+                Error::coin_select("fee ({fee}) greater than change ({change_amount})")
+            })?;
+        };
+
+        // TODO: Use a different locktime if we have CLTV multisig script.
+        let lock_time = LockTime::ZERO;
+
+        let unsigned_tx = Transaction {
+            version: transaction::Version::TWO,
+            lock_time,
+            input: selected_vtxos
+                .iter()
+                .map(|(vtxo_outpoint, _)| TxIn {
+                    previous_output: vtxo_outpoint.outpoint.expect("outpoint"),
+                    script_sig: Default::default(),
+                    // TODO: Use a different sequence number if we have a CLTV multisig script.
+                    sequence: bitcoin::Sequence::MAX,
+                    witness: Default::default(),
+                })
+                .collect(),
+            output: outputs,
+        };
+        let unsigned_psbt = Psbt::from_unsigned_tx(unsigned_tx).map_err(Error::transaction)?;
+        let mut signed_redeem_psbt = unsigned_psbt;
+
+        let prevouts = selected_vtxos
             .iter()
-            .filter_map(|i| i.witness_utxo.clone())
+            .map(|(vtxo_outpoint, vtxo)| TxOut {
+                value: vtxo_outpoint.amount,
+                script_pubkey: vtxo.script_pubkey(),
+            })
             .collect::<Vec<_>>();
 
         // Sign all redeem transaction inputs (could be multiple VTXOs!).
@@ -1196,6 +1229,8 @@ where
                         index = i,
                         "Signing selected VTXO for redeem transaction"
                     );
+
+                    psbt_input.witness_utxo = Some(prevouts[i].clone());
 
                     // In the case of input VTXOs, we are actually using a script spend path.
                     let (forfeit_script, forfeit_control_block) = vtxo.forfeit_spend_info();
@@ -1241,9 +1276,10 @@ where
             }
         }
 
-        let txid = self
-            .asp_client()
-            .complete_payment_request(signed_redeem_psbt)
+        let txid = signed_redeem_psbt.unsigned_tx.compute_txid();
+
+        self.asp_client()
+            .submit_redeem_transaction(signed_redeem_psbt)
             .await
             .map_err(Error::asp)
             .context("failed to complete payment request")?;
