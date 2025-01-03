@@ -8,11 +8,11 @@ anyhow = "1"
 ark-rs = { path = "../ark-rs" }
 async-stream = "0.3"
 base64 = "0.22.1"
-bdk_esplora = "0.19.0"
-bdk_wallet = "1.0.0-beta.5"
+bdk_esplora = "0.20.1"
+bdk_wallet = "1.0.0"
 bech32 = "0.11"
 bitcoin = { version = "0.32.4", features = ["rand"] }
-esplora-client = { version = "0.10.0", features = ["async-https", "blocking-https"] }
+esplora-client = { version = "0.11.0", features = ["async-https", "blocking-https"] }
 futures = "0.3.31"
 prost = "0.13.3"
 rand = "0.8.5"
