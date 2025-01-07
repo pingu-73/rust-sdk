@@ -189,7 +189,6 @@ mod tests {
             spent_by: "".to_string(),
             expire_at,
             swept: false,
-            is_oor: false,
             redeem_tx: "".to_string(),
             amount,
             pubkey: "".to_string(),

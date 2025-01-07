@@ -105,7 +105,7 @@ where
             .map_err(Error::wallet)
             .context("Failed syncing wallet")?;
         self.inner
-            .apply_update_at(update, Some(now))
+            .apply_update_at(update, now)
             .map_err(Error::wallet)?;
 
         Ok(())

@@ -5,9 +5,7 @@ use crate::asp::types::ListVtxo;
 use crate::asp::types::VtxoOutPoint;
 use crate::asp::Error;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
-use crate::generated::ark::v1::AsyncPaymentInput;
-use crate::generated::ark::v1::CompletePaymentRequest;
-use crate::generated::ark::v1::CreatePaymentRequest;
+use crate::generated::ark::v1::input::TaprootTree;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetInfoRequest;
 use crate::generated::ark::v1::GetRoundRequest;
@@ -18,39 +16,30 @@ use crate::generated::ark::v1::Output;
 use crate::generated::ark::v1::PingRequest;
 use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
 use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
+use crate::generated::ark::v1::SubmitRedeemTxRequest;
 use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
+use crate::generated::ark::v1::Tapscripts;
 use async_stream::stream;
 use base64::Engine;
-use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
-use bitcoin::TapLeafHash;
+use bitcoin::ScriptBuf;
 use bitcoin::Txid;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use tonic::transport::Channel;
 
-pub struct PaymentInput {
-    pub forfeit_leaf_hash: TapLeafHash,
-    pub outpoint: Option<OutPoint>,
-    pub descriptor: String,
-}
-
-pub struct PaymentOutput {
-    pub address: ArkAddress,
-    pub amount: Amount,
-}
-
 #[derive(Debug)]
 pub struct RoundInputs {
     pub outpoint: Option<OutPoint>,
-    pub descriptor: String,
+    // One script per branch of the taproot tree.
+    pub tapscripts: Vec<ScriptBuf>,
 }
 
 pub struct RoundOutputs {
@@ -198,12 +187,16 @@ impl Client {
 
         let inputs = inputs
             .iter()
-            .map(|input| Input {
-                outpoint: input.outpoint.map(|out| Outpoint {
-                    txid: out.txid.to_string(),
-                    vout: out.vout,
-                }),
-                descriptor: input.descriptor.clone(),
+            .map(|input| {
+                let scripts = input.tapscripts.iter().map(|s| s.to_hex_string()).collect();
+
+                Input {
+                    outpoint: input.outpoint.map(|out| Outpoint {
+                        txid: out.txid.to_string(),
+                        vout: out.vout,
+                    }),
+                    taproot_tree: Some(TaprootTree::Tapscripts(Tapscripts { scripts })),
+                }
             })
             .collect();
 
@@ -215,14 +208,14 @@ impl Client {
             })
             .await
             .map_err(Error::request)?;
-        let payment_id = response.into_inner().id;
+        let request_id = response.into_inner().request_id;
 
-        Ok(payment_id)
+        Ok(request_id)
     }
 
     pub async fn register_outputs_for_next_round(
         &self,
-        payment_id: String,
+        request_id: String,
         outpouts: Vec<RoundOutputs>,
     ) -> Result<(), Error> {
         let mut client = self.inner_client()?;
@@ -237,7 +230,7 @@ impl Client {
 
         client
             .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
-                id: payment_id,
+                request_id,
                 outputs,
             })
             .await
@@ -246,88 +239,34 @@ impl Client {
         Ok(())
     }
 
-    pub async fn send_payment(
-        &self,
-        inputs: Vec<PaymentInput>,
-        outputs: Vec<PaymentOutput>,
-    ) -> Result<Psbt, Error> {
+    pub async fn submit_redeem_transaction(&self, redeem_psbt: Psbt) -> Result<Psbt, Error> {
         let mut client = self.inner_client()?;
 
-        let inputs = inputs
-            .iter()
-            .map(|input| {
-                // The ASP reverses this for some reason.
-                let mut leaf_hash = input.forfeit_leaf_hash.to_byte_array();
-                leaf_hash.reverse();
+        let base64 = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        );
 
-                AsyncPaymentInput {
-                    input: Some(Input {
-                        outpoint: input.outpoint.map(|outpoint| Outpoint {
-                            txid: outpoint.txid.to_string(),
-                            vout: outpoint.vout,
-                        }),
-                        descriptor: input.descriptor.clone(),
-                    }),
-                    forfeit_leaf_hash: leaf_hash.to_lower_hex_string(),
-                }
-            })
-            .collect();
-
-        let outputs = outputs
-            .iter()
-            .map(|output| Output {
-                address: output.address.encode(),
-                amount: output.amount.to_sat(),
-            })
-            .collect();
+        let redeem_tx = base64.encode(redeem_psbt.serialize());
 
         let res = client
-            .create_payment(CreatePaymentRequest { inputs, outputs })
+            .submit_redeem_tx(SubmitRedeemTxRequest { redeem_tx })
             .await
             .map_err(Error::request)?;
 
-        let base64 = base64::engine::GeneralPurpose::new(
-            &base64::alphabet::STANDARD,
-            base64::engine::GeneralPurposeConfig::new(),
-        );
+        let psbt = base64
+            .decode(res.into_inner().signed_redeem_tx)
+            .map_err(Error::conversion)?;
+        let psbt = Psbt::deserialize(&psbt).map_err(Error::conversion)?;
 
-        let signed_redeem_psbt = {
-            let psbt = base64
-                .decode(&res.into_inner().signed_redeem_tx)
-                .map_err(Error::conversion)?;
-
-            Psbt::deserialize(&psbt).map_err(Error::conversion)?
-        };
-
-        Ok(signed_redeem_psbt)
+        Ok(psbt)
     }
 
-    pub async fn complete_payment_request(&self, signed_psbt: Psbt) -> Result<Txid, Error> {
-        let mut client = self.inner_client()?;
-
-        let base64 = base64::engine::GeneralPurpose::new(
-            &base64::alphabet::STANDARD,
-            base64::engine::GeneralPurposeConfig::new(),
-        );
-
-        let signed_psbt_base64 = base64.encode(signed_psbt.serialize());
-
-        let _response = client
-            .complete_payment(CompletePaymentRequest {
-                signed_redeem_tx: signed_psbt_base64,
-            })
-            .await
-            .map_err(Error::request)?;
-        let txid = signed_psbt.unsigned_tx.compute_txid();
-
-        Ok(txid)
-    }
-
-    pub async fn ping(&self, payment_id: String) -> Result<(), Error> {
+    pub async fn ping(&self, request_id: String) -> Result<(), Error> {
         let mut client = self.inner_client()?;
 
         client
-            .ping(PingRequest { payment_id })
+            .ping(PingRequest { request_id })
             .await
             .map_err(|e| Error::ping(e.message().to_string()))?;
 

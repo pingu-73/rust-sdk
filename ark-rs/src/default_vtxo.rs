@@ -31,6 +31,9 @@ pub struct DefaultVtxo {
 }
 
 impl DefaultVtxo {
+    /// 64 bytes per pubkey. In the default VTXO we have 2 pubkeys
+    pub const FORFEIT_WITNESS_SIZE: usize = 64 * 2;
+
     pub fn new<C>(
         secp: &Secp256k1<C>,
         asp: XOnlyPublicKey,
@@ -126,6 +129,13 @@ impl DefaultVtxo {
             .expect("exit script");
 
         (exit_script, control_block)
+    }
+
+    pub fn tapscripts(&self) -> Vec<ScriptBuf> {
+        let (exit_script, _) = self.exit_spend_info();
+        let (forfeit_script, _) = self.forfeit_spend_info();
+
+        vec![exit_script, forfeit_script]
     }
 
     fn forfeit_script(&self) -> ScriptBuf {
