@@ -1,8 +1,9 @@
 use bech32::Bech32m;
 use bech32::Hrp;
 use bitcoin::key::TweakedPublicKey;
+use bitcoin::Network;
+use bitcoin::ScriptBuf;
 use bitcoin::XOnlyPublicKey;
-use bitcoin::{Network, ScriptBuf};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ArkAddress {
