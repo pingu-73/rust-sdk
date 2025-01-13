@@ -28,6 +28,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "e2e_tests"
+
       - name: Build test binaries
         run: cargo test -p e2e-tests --no-run
 
