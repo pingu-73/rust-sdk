@@ -134,6 +134,19 @@ clarkd-run:
 
     echo "Clarkd started. Find the logs in {{clarkd_logs}}"
 
+
+# Build `clarkd` binary.
+clarkd-build:
+    #!/usr/bin/env bash
+
+    set -euxo pipefail
+
+    make -C $CLARKD_DIR build
+
+    echo "Clarkd built"
+
+
+
 # Initialize `clarkd` by creating and unlocking a new wallet.
 clarkd-init:
     #!/usr/bin/env bash
