@@ -73,10 +73,12 @@ jobs:
 
       - name: Fund clarkd server
         run: |
-          just clarkd-fund 10
+          just clarkd-fund 20
+          # Wait for arkd to catch up with the chain
+          sleep 10
 
       - name: Run E2E Tests
-        run: cargo test -p e2e-tests -- --ignored
+        run: cargo test -p e2e-tests -- --ignored --test-threads=1
 
       - name: Cleanup Nigiri
         if: always()
