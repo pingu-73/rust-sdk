@@ -1,0 +1,94 @@
+name: Core E2E Tests with Nigiri
+
+on:
+  workflow_call:
+    inputs:
+      clarkd-version:
+        description: 'Version of clarkd to test against (git tag, version, hash)'
+        required: true
+        type: string
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+  ARK_GO_DIR: ./ark-go
+  CLARKD_DIR: ./ark-go/ark/server
+
+jobs:
+  e2e-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: extractions/setup-just@v2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Just
+        uses: extractions/setup-just@v1
+
+      - name: Install Nigiri
+        run: |
+          curl https://getnigiri.vulpem.com | bash
+
+      - name: Start Nigiri
+        run: |
+          nigiri start
+          # Wait for Nigiri to be fully up
+          sleep 15
+
+      - name: Checkout clarkd `${{ inputs.clarkd-version }}`
+        run: |
+          just clarkd-checkout ${{ inputs.clarkd-version }}
+
+      - name: Patch makefile for longer rounds
+        run: |
+          just clarkd-patch-makefile
+
+      - name: Set up Go for clarkd
+        uses: actions/setup-go@v4
+        with:
+          go-version: '>=1.23.1'
+
+      - name: Run go work sync
+        run: |
+          cd $CLARKD_DIR
+          go work sync
+
+      - name: Build clarkd server
+        run: |
+          just clarkd-build
+
+      - name: Run clarkd server
+        run: |
+          just clarkd-run
+
+      - name: Init clarkd server
+        run: |
+          just clarkd-init
+
+      - name: Fund clarkd server
+        run: |
+          just clarkd-fund 10
+
+      - name: Run E2E Tests
+        run: cargo test -p e2e-tests -- --ignored
+
+      - name: Cleanup Nigiri
+        if: always()
+        run: nigiri stop --delete
+
+      - name: Print clarkd logs on failure
+        if: failure()
+        run: |
+          if [ -f clarkd.log ]; then
+            echo "=== clarkd.log contents ==="
+            cat clarkd.log
+            echo "=== End of clarkd.log ==="
+          else
+            echo "clarkd.log file not found"
+          fi

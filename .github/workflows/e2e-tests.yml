@@ -1,97 +1,21 @@
-name: E2E Tests with Nigiri
+name: E2E Test Matrix Runner
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-
-env:
-  CARGO_INCREMENTAL: 0
-  CARGO_TERM_COLOR: always
+  # Schedule nightly runs
+  schedule:
+    - cron: '0 0 * * *'  # Run at midnight UTC every day
 
 jobs:
-  e2e-tests:
-    runs-on: ubuntu-latest
-    env:
-      ARK_GO_DIR: ./ark-go
-      CLARKD_DIR: ./ark-go/ark/server
+  matrix-runner:
     strategy:
-      fail-fast: false  # Continue with other versions if one fails
+      fail-fast: false
       matrix:
-        clarkd-version: ['v0.4.2'] # TODO: add more versions, e.g. master
+        clarkd-version: [
+          'v0.4.2',
+          'master'
+          # Add more versions as needed
+        ]
 
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: extractions/setup-just@v2
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Just
-        uses: extractions/setup-just@v1
-
-      - name: Install Nigiri
-        run: |
-          curl https://getnigiri.vulpem.com | bash
-
-      - name: Start Nigiri
-        run: |
-          nigiri start
-          # Wait for Nigiri to be fully up
-          sleep 15
-
-      - name: Checkout clarkd `${{ matrix.clarkd-version }}`
-        run: |
-          just clarkd-checkout ${{ matrix.clarkd-version }}
-        
-      - name: Patch makefile for longer rounds
-        run: |
-          just clarkd-patch-makefile
-
-      - name: Set up Go for clarkd
-        uses: actions/setup-go@v4
-        with:
-          go-version: '>=1.23.1'
-
-      - name: Run go work sync
-        run: |
-          cd $CLARKD_DIR
-          go work sync
-
-      - name: Build clarkd server
-        run: |
-          just clarkd-build
-
-      - name: Run clarkd server
-        run: |
-          just clarkd-run
-
-      - name: Init clarkd server
-        run: |
-          just clarkd-init
-
-      - name: Fund clarkd server
-        run: |
-          just clarkd-fund 10
-
-      - name: Run E2E Tests (for now only one we know runs)
-        run: cargo test -p e2e-tests e2e -- --ignored
-
-      - name: Cleanup Nigiri
-        if: always()
-        run: nigiri stop --delete
-
-      - name: Print clarkd logs on failure
-        if: failure()
-        run: |
-          if [ -f clarkd.log ]; then
-            echo "=== clarkd.log contents ==="
-            cat clarkd.log
-            echo "=== End of clarkd.log ==="
-          else
-            echo "clarkd.log file not found"
-          fi
+    uses: ./.github/workflows/e2e-core.yml
+    with:
+      clarkd-version: ${{ matrix.clarkd-version }}

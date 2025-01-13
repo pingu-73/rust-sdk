@@ -60,3 +60,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Running cargo tests
         run: RUST_BACKTRACE=1 cargo test --workspace --exclude e2e-tests
+
+  e2e-tests:
+    needs: [ clippy ]
+    strategy:
+      fail-fast: false
+      matrix:
+        clarkd-version: [
+          'v0.4.2'
+        ]
+
+    uses: ./.github/workflows/e2e-core.yml
+    with:
+      clarkd-version: ${{ matrix.clarkd-version }}
