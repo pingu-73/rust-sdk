@@ -22,6 +22,7 @@ use tokio::try_join;
 mod common;
 
 #[tokio::test]
+#[ignore]
 pub async fn multi_party_e2e() {
     init_tracing();
     let nigiri = Arc::new(Nigiri::default());

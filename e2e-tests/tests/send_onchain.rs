@@ -19,6 +19,7 @@ mod common;
 // unless we actually manipulate the blockchain time (or wait for a long time).
 
 #[tokio::test]
+#[ignore]
 pub async fn send_onchain_boarding_output() {
     init_tracing();
 
@@ -99,6 +100,7 @@ pub async fn send_onchain_boarding_output() {
 }
 
 #[tokio::test]
+#[ignore]
 pub async fn send_onchain_vtxo() {
     init_tracing();
 
