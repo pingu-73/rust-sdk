@@ -15,8 +15,43 @@ env:
   CLARKD_DIR: ./ark-go/ark/server
 
 jobs:
-  e2e-test:
+  build-tests:
     runs-on: ubuntu-latest
+    outputs:
+      test-binaries: ${{ steps.find-binaries.outputs.binaries }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build test binaries
+        run: cargo test -p e2e-tests --no-run
+
+      - name: Find test binaries
+        id: find-binaries
+        run: |
+          BINARIES=$(find target/debug/deps -type f -executable -name "e2e_*" | jq -R -s -c 'split("\n")[:-1]')
+          echo "binaries=$BINARIES" >> $GITHUB_OUTPUT
+          echo "Found test binaries: $BINARIES"
+
+      - name: Upload test binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-binaries
+          path: target/debug/deps/e2e_*
+          retention-days: 1
+
+  run-tests:
+    needs: build-tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test-binary: ${{ fromJson(needs.build-tests.outputs.test-binaries) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -25,11 +60,17 @@ jobs:
 
       - uses: extractions/setup-just@v2
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Download test binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: test-binaries
+          path: target/debug/deps
 
-      - name: Install Just
-        uses: extractions/setup-just@v1
+      - name: Show downloaded binaries
+        run: ls -la target/debug/deps/
+
+      - name: Make binaries executable
+        run: chmod +x target/debug/deps/e2e_*
 
       - name: Install Nigiri
         run: |
@@ -41,6 +82,7 @@ jobs:
           # Wait for Nigiri to be fully up
           sleep 15
 
+      # TODO: CI could be optimized by moving this step into the prior step and share the build binaries
       - name: Checkout clarkd `${{ inputs.clarkd-version }}`
         run: |
           just clarkd-checkout ${{ inputs.clarkd-version }}
@@ -77,8 +119,11 @@ jobs:
           # Wait for arkd to catch up with the chain
           sleep 10
 
-      - name: Run E2E Tests
-        run: cargo test -p e2e-tests --test e2e --test multi-party-e2e -- --ignored --test-threads=1
+      - name: Run Test Binary
+        run: |
+          test_name=$(basename ${{ matrix.test-binary }})
+          echo "Running test: $test_name"
+          ${{ matrix.test-binary }} --ignored --test-threads=1 --nocapture
 
       - name: Cleanup Nigiri
         if: always()
