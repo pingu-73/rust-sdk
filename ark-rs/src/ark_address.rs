@@ -1,3 +1,4 @@
+use crate::error::Error;
 use bech32::Bech32m;
 use bech32::Hrp;
 use bitcoin::key::TweakedPublicKey;
@@ -42,6 +43,24 @@ impl ArkAddress {
 
         bech32::encode::<Bech32m>(self.hrp, bytes.as_slice()).expect("data can be encoded")
     }
+
+    pub fn decode(value: &str) -> Result<Self, Error> {
+        let (hrp, bytes) = bech32::decode(value).map_err(Error::address_format)?;
+
+        let asp = XOnlyPublicKey::from_slice(&bytes[..32]).map_err(Error::address_format)?;
+        let vtxo_tap_key =
+            XOnlyPublicKey::from_slice(&bytes[32..]).map_err(Error::address_format)?;
+
+        // It is safe to call `dangerous_assume_tweaked` because we are treating the VTXO tap key as
+        // finished product i.e. we are only going to use it as an address to send coins to.
+        let vtxo_tap_key = TweakedPublicKey::dangerous_assume_tweaked(vtxo_tap_key);
+
+        Ok(Self {
+            hrp,
+            asp,
+            vtxo_tap_key,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -49,30 +68,12 @@ mod tests {
     use super::*;
     use bitcoin::hex::DisplayHex;
 
-    impl ArkAddress {
-        fn decode(value: &str) -> Self {
-            let (hrp, bytes) = bech32::decode(value).unwrap();
-
-            let asp = XOnlyPublicKey::from_slice(&bytes[..32]).unwrap();
-            let vtxo_tap_key = XOnlyPublicKey::from_slice(&bytes[32..]).unwrap();
-
-            // This is only okay because we are using this for testing.
-            let vtxo_tap_key = TweakedPublicKey::dangerous_assume_tweaked(vtxo_tap_key);
-
-            Self {
-                hrp,
-                asp,
-                vtxo_tap_key,
-            }
-        }
-    }
-
     // Taken from https://github.com/ark-network/ark/blob/b536a9e65252573aaa48110ef5d0c90894eb550c/common/fixtures/encoding.json.
     #[tokio::test]
     pub async fn roundtrip() {
         let address = "tark1x0lm8hhr2wc6n6lyemtyh9rz8rg2ftpkfun46aca56kjg3ws0tsztfpuanaquxc6faedvjk3tax0575y6perapg3e95654pk8r4fjecs5fyd2";
 
-        let decoded = ArkAddress::decode(address);
+        let decoded = ArkAddress::decode(address).unwrap();
 
         let hrp = decoded.hrp.to_string();
         assert_eq!(hrp, "tark");
