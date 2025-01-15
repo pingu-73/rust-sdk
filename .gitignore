@@ -23,3 +23,6 @@ Cargo.lock
 /.env
 /clarkd.log
 /clarkd.log.old
+
+# Repository for clarkd
+/ark-go

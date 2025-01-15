@@ -1,0 +1,145 @@
+name: Core E2E Tests with Nigiri
+
+on:
+  workflow_call:
+    inputs:
+      clarkd-version:
+        description: 'Version of clarkd to test against (git tag, version, hash)'
+        required: true
+        type: string
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+  ARK_GO_DIR: ./ark-go
+  CLARKD_DIR: ./ark-go/ark/server
+
+jobs:
+  build-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      test-binaries: ${{ steps.find-binaries.outputs.binaries }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "e2e_tests"
+
+      - name: Build test binaries
+        run: cargo test -p e2e-tests --no-run
+
+      - name: Find test binaries
+        id: find-binaries
+        run: |
+          BINARIES=$(find target/debug/deps -type f -executable -name "e2e_*" | jq -R -s -c 'split("\n")[:-1]')
+          echo "binaries=$BINARIES" >> $GITHUB_OUTPUT
+          echo "Found test binaries: $BINARIES"
+
+      - name: Upload test binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-binaries
+          path: target/debug/deps/e2e_*
+          retention-days: 1
+
+  run-tests:
+    needs: build-tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test-binary: ${{ fromJson(needs.build-tests.outputs.test-binaries) }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: extractions/setup-just@v2
+
+      - name: Download test binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: test-binaries
+          path: target/debug/deps
+
+      - name: Show downloaded binaries
+        run: ls -la target/debug/deps/
+
+      - name: Make binaries executable
+        run: chmod +x target/debug/deps/e2e_*
+
+      - name: Install Nigiri
+        run: |
+          curl https://getnigiri.vulpem.com | bash
+
+      - name: Start Nigiri
+        run: |
+          nigiri start
+          # Wait for Nigiri to be fully up
+          sleep 15
+
+      # TODO: CI could be optimized by moving this step into the prior step and share the build binaries
+      - name: Checkout clarkd `${{ inputs.clarkd-version }}`
+        run: |
+          just clarkd-checkout ${{ inputs.clarkd-version }}
+
+      - name: Patch makefile for longer rounds
+        run: |
+          just clarkd-patch-makefile
+
+      - name: Set up Go for clarkd
+        uses: actions/setup-go@v4
+        with:
+          go-version: '>=1.23.1'
+
+      - name: Run go work sync
+        run: |
+          cd $CLARKD_DIR
+          go work sync
+
+      - name: Build clarkd server
+        run: |
+          just clarkd-build
+
+      - name: Run clarkd server
+        run: |
+          just clarkd-run
+
+      - name: Init clarkd server
+        run: |
+          just clarkd-init
+
+      - name: Fund clarkd server
+        run: |
+          just clarkd-fund 20
+          # Wait for arkd to catch up with the chain
+          sleep 10
+
+      - name: Run Test Binary
+        run: |
+          test_name=$(basename ${{ matrix.test-binary }})
+          echo "Running test: $test_name"
+          ${{ matrix.test-binary }} --ignored --test-threads=1 --nocapture
+
+      - name: Cleanup Nigiri
+        if: always()
+        run: nigiri stop --delete
+
+      - name: Print clarkd logs on failure
+        if: failure()
+        run: |
+          if [ -f clarkd.log ]; then
+            echo "=== clarkd.log contents ==="
+            cat clarkd.log
+            echo "=== End of clarkd.log ==="
+          else
+            echo "clarkd.log file not found"
+          fi

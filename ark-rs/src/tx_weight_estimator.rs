@@ -1,9 +1,10 @@
 use crate::Error;
 use bitcoin::taproot::ControlBlock;
+use bitcoin::Amount;
 use bitcoin::FeeRate;
 use bitcoin::OutPoint;
 use bitcoin::ScriptBuf;
-use bitcoin::{Amount, VarInt};
+use bitcoin::VarInt;
 
 /// InputSize 41 bytes
 ///     - PreviousOutPoint:

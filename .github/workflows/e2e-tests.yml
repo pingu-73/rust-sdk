@@ -1,0 +1,21 @@
+name: E2E Test Matrix Runner
+
+on:
+  # Schedule nightly runs
+  schedule:
+    - cron: '0 0 * * *'  # Run at midnight UTC every day
+
+jobs:
+  matrix-runner:
+    strategy:
+      fail-fast: false
+      matrix:
+        clarkd-version: [
+          'v0.4.2',
+          'master'
+          # Add more versions as needed
+        ]
+
+    uses: ./.github/workflows/e2e-core.yml
+    with:
+      clarkd-version: ${{ matrix.clarkd-version }}
