@@ -27,7 +27,8 @@ pub async fn send_onchain_vtxo() {
 
     // To be able to spend a boarding output it needs to have been confirmed for at least 512
     // seconds.
-    let outpoint_blocktime_offset = 512 + 10;
+    let outpoint_blocktime_offset = 1024 + 10;
+
     let nigiri = Arc::new(Nigiri::new(Some(outpoint_blocktime_offset)));
 
     let secp = Secp256k1::new();
