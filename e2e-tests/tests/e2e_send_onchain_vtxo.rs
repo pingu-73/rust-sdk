@@ -15,8 +15,6 @@ use std::sync::Arc;
 
 mod common;
 
-// TODO: once the test is working, rename it to `e2e_send_onchain_vtxo` so that it is run on CI.
-
 // TODO: Test a single transaction with both VTXOs and boarding outputs. It's not straightforward
 // unless we actually manipulate the blockchain time (or wait for a long time).
 
