@@ -15,8 +15,6 @@ use std::sync::Arc;
 
 mod common;
 
-// TODO: once the test is working, rename it to `e2e_send_onchain` so that it is run on CI.
-
 #[tokio::test]
 #[ignore]
 pub async fn send_onchain_boarding_output() {

@@ -15,8 +15,6 @@ use std::sync::Arc;
 
 mod common;
 
-// TODO: once the test is working, rename it to `e2e_send_onchain_vtxo` so that it is run on CI.
-
 // TODO: Test a single transaction with both VTXOs and boarding outputs. It's not straightforward
 // unless we actually manipulate the blockchain time (or wait for a long time).
 
@@ -27,7 +25,8 @@ pub async fn send_onchain_vtxo() {
 
     // To be able to spend a boarding output it needs to have been confirmed for at least 512
     // seconds.
-    let outpoint_blocktime_offset = 512 + 10;
+    let outpoint_blocktime_offset = 1024 + 10;
+
     let nigiri = Arc::new(Nigiri::new(Some(outpoint_blocktime_offset)));
 
     let secp = Secp256k1::new();
