@@ -163,7 +163,7 @@ impl Client {
 
         let spent = response
             .get_ref()
-            .spendable_vtxos
+            .spent_vtxos
             .iter()
             .map(VtxoOutPoint::try_from)
             .collect::<Result<Vec<_>, _>>()?;
