@@ -239,10 +239,16 @@ pub async fn set_up_client(
             .unwrap();
     let wallet = Arc::new(Mutex::new(wallet));
 
-    let client = OfflineClient::new(name, kp, nigiri, wallet.clone())
-        .connect()
-        .await
-        .unwrap();
+    let client = OfflineClient::new(
+        name,
+        kp,
+        nigiri,
+        wallet.clone(),
+        "http://localhost:7070".to_string(),
+    )
+    .connect()
+    .await
+    .unwrap();
 
     (client, wallet)
 }

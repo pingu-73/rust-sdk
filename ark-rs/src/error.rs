@@ -28,6 +28,8 @@ enum Kind {
     CoinSelect(CoinSelectError),
     /// An error related to actions within the wallet
     Wallet(WalletError),
+    /// An error related to encoding or decoding an Ark address.
+    ArkAddress(ArkAddressError),
 }
 
 #[derive(Debug)]
@@ -52,6 +54,11 @@ struct TransactionError {
 
 #[derive(Debug)]
 struct CoinSelectError {
+    source: Source,
+}
+
+#[derive(Debug)]
+struct ArkAddressError {
     source: Source,
 }
 
@@ -102,6 +109,12 @@ impl Error {
             source: source.into(),
         }))
     }
+
+    pub(crate) fn address_format(source: impl Into<Source>) -> Self {
+        Error::new(Kind::ArkAddress(ArkAddressError {
+            source: source.into(),
+        }))
+    }
 }
 
 impl fmt::Display for Error {
@@ -128,6 +141,7 @@ impl fmt::Display for Kind {
             Kind::Transaction(ref err) => err.fmt(f),
             Kind::CoinSelect(ref err) => err.fmt(f),
             Kind::Wallet(ref err) => err.fmt(f),
+            Kind::ArkAddress(ref err) => err.fmt(f),
         }
     }
 }
@@ -163,6 +177,12 @@ impl fmt::Display for CoinSelectError {
 }
 
 impl fmt::Display for WalletError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.source.fmt(f)
+    }
+}
+
+impl fmt::Display for ArkAddressError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.source.fmt(f)
     }

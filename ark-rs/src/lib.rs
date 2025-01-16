@@ -155,11 +155,17 @@ where
     B: Blockchain,
     W: BoardingWallet + OnchainWallet,
 {
-    pub fn new(name: String, kp: Keypair, blockchain: Arc<B>, wallet: Arc<Mutex<W>>) -> Self {
+    pub fn new(
+        name: String,
+        kp: Keypair,
+        blockchain: Arc<B>,
+        wallet: Arc<Mutex<W>>,
+        asp_url: String,
+    ) -> Self {
         let secp = Secp256k1::new();
         let secp_zkp = zkp::Secp256k1::new();
 
-        let asp_client = asp::Client::new("http://localhost:7070".to_string());
+        let asp_client = asp::Client::new(asp_url);
 
         Self {
             asp_client,
