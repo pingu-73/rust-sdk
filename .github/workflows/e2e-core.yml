@@ -45,9 +45,10 @@ jobs:
       - name: Upload test binaries
         uses: actions/upload-artifact@v4
         with:
-          name: test-binaries
+          name: test-binaries_${{ inputs.clarkd-version }}
           path: target/debug/deps/e2e_*
           retention-days: 1
+          overwrite: true
 
   run-tests:
     needs: build-tests
@@ -67,7 +68,7 @@ jobs:
       - name: Download test binaries
         uses: actions/download-artifact@v4
         with:
-          name: test-binaries
+          name: test-binaries_${{ inputs.clarkd-version }}
           path: target/debug/deps
 
       - name: Show downloaded binaries
