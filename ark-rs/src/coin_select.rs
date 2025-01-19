@@ -189,6 +189,7 @@ mod tests {
             spent_by: "".to_string(),
             expire_at,
             swept: false,
+            is_pending: false,
             redeem_tx: "".to_string(),
             amount,
             pubkey: "".to_string(),
