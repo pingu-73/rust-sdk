@@ -35,7 +35,6 @@ use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use std::str::FromStr;
-use tonic::transport::Channel;
 
 #[derive(Debug)]
 pub struct RoundInputs {
@@ -143,7 +142,10 @@ pub struct RoundTransaction {
 #[derive(Debug, Clone)]
 pub struct Client {
     url: String,
-    inner: Option<ArkServiceClient<Channel>>,
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    inner: Option<ArkServiceClient<tonic::transport::Channel>>,
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    inner: Option<ArkServiceClient<tonic_web_wasm_client::Client>>,
 }
 
 impl Client {
@@ -152,6 +154,13 @@ impl Client {
     }
 
     pub async fn connect(&mut self) -> Result<(), Error> {
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        let client = {
+            let web_client = tonic_web_wasm_client::Client::new(self.url.clone());
+            ArkServiceClient::new(web_client)
+        };
+
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         let client = ArkServiceClient::connect(self.url.clone())
             .await
             .map_err(Error::connect)?;
@@ -448,7 +457,14 @@ impl Client {
         Ok(round)
     }
 
-    fn inner_client(&self) -> Result<ArkServiceClient<Channel>, Error> {
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    fn inner_client(&self) -> Result<ArkServiceClient<tonic::transport::Channel>, Error> {
+        // Cloning an `ArkServiceClient<Channel>` is cheap.
+        self.inner.clone().ok_or(Error::not_connected())
+    }
+
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    fn inner_client(&self) -> Result<ArkServiceClient<tonic_web_wasm_client::Client>, Error> {
         // Cloning an `ArkServiceClient<Channel>` is cheap.
         self.inner.clone().ok_or(Error::not_connected())
     }

@@ -43,6 +43,7 @@ use bitcoin::TxOut;
 use bitcoin::Txid;
 use bitcoin::Witness;
 use error::Error;
+use futures::future;
 use futures::FutureExt;
 use rand::CryptoRng;
 use rand::Rng;
@@ -66,11 +67,29 @@ use zkp::MusigSessionId;
 #[allow(warnings)]
 #[allow(clippy::all)]
 mod generated {
-    #[path = ""]
-    pub mod ark {
-        #[path = "ark.v1.rs"]
-        pub mod v1;
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    pub mod std {
+        #[path = ""]
+        pub mod ark {
+            #[path = "ark.v1.rs"]
+            pub mod v1;
+        }
     }
+
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    pub use std::*;
+
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub mod nostd {
+        #[path = ""]
+        pub mod ark {
+            #[path = "ark.v1.rs"]
+            pub mod v1;
+        }
+    }
+
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub use nostd::*;
 }
 
 // TODO: Reconsider whether these should be public or not.
@@ -305,7 +324,7 @@ where
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            sleep(Duration::from_secs(1)).await;
         };
 
         tracing::info!(%txid, "Boarding success");
@@ -567,7 +586,7 @@ where
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            sleep(Duration::from_secs(1)).await;
         };
 
         tracing::info!(%txid, "Off-boarding success");
@@ -736,13 +755,13 @@ where
                         tracing::warn!("Error via ping: {e:?}");
                     }
 
-                    tokio::time::sleep(Duration::from_millis(5000)).await
+                    sleep(Duration::from_millis(5000)).await
                 }
             }
         }
         .remote_handle();
 
-        tokio::spawn(ping_task);
+        spawn(ping_task);
 
         let mut stream = asp_client.get_event_stream().await?;
 
@@ -1470,7 +1489,7 @@ where
                 tracing::warn!(%txid, "Error broadcasting VTXO transaction: {e:?}");
 
                 // TODO: Should only retry specific errors.
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                sleep(Duration::from_secs(1)).await;
             }
 
             tracing::info!(%txid, i, total_txs = all_txs_len, "Broadcasted VTXO transaction");
@@ -1628,5 +1647,32 @@ where
 
     fn blockchain(&self) -> &B {
         &self.inner.blockchain
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub fn spawn<F>(future: F)
+where
+    F: future::Future<Output = ()> + 'static,
+{
+    wasm_bindgen_futures::spawn_local(future);
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub fn spawn<F>(future: F)
+where
+    F: future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(future);
+}
+
+pub async fn sleep(duration: Duration) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        gloo_timers::future::sleep(duration).await
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        tokio::time::sleep(duration).await;
     }
 }

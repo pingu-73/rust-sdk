@@ -13,6 +13,9 @@ fmt:
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings
 
+build-wasm:
+    cargo build -p ark-rs --target wasm32-unknown-unknown
+
 ## -----------------
 ## Code generation
 ## -----------------
