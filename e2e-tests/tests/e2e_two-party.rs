@@ -39,8 +39,7 @@ pub async fn e2e() {
         let asp_pk = alice_asp_info.pk;
         let (asp_pk, _) = asp_pk.inner.x_only_public_key();
 
-        let mut wallet = alice_wallet.lock().await;
-        wallet
+        alice_wallet
             .new_boarding_output(
                 asp_pk,
                 alice_asp_info.round_lifetime,
@@ -82,7 +81,7 @@ pub async fn e2e() {
     let amount = Amount::from_sat(100_000);
     tracing::debug!("Alice is sending {amount} to Bob offchain...");
 
-    alice.send_oor(bob_offchain_address, amount).await.unwrap();
+    alice.send_vtxo(bob_offchain_address, amount).await.unwrap();
 
     let bob_offchain_balance = bob.offchain_balance().await.unwrap();
     let bob_vtxos = bob.list_vtxos().await.unwrap();
@@ -105,17 +104,10 @@ pub async fn e2e() {
         "Post settlement: Bob offchain balance: {bob_offchain_balance}"
     );
 
-    let onchain_address = {
-        let mut wallet = alice_wallet.lock().await;
-        wallet.get_onchain_address().unwrap()
-    };
+    let onchain_address = alice_wallet.get_onchain_address().unwrap();
 
-    let balance = {
-        // sync the wallet
-        let mut wallet = alice_wallet.lock().await;
-        wallet.sync().await.unwrap();
-        wallet.balance().unwrap()
-    };
+    alice_wallet.sync().await.unwrap();
+    let balance = alice_wallet.balance().unwrap();
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
     let alice_vtxos = alice.list_vtxos().await.unwrap();
@@ -131,12 +123,8 @@ pub async fn e2e() {
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let balance = {
-        // sync the wallet
-        let mut wallet = alice_wallet.lock().await;
-        wallet.sync().await.unwrap();
-        wallet.balance().unwrap()
-    };
+    alice_wallet.sync().await.unwrap();
+    let balance = alice_wallet.balance().unwrap();
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
     let alice_vtxos = alice.list_vtxos().await.unwrap();
@@ -152,7 +140,7 @@ pub async fn e2e() {
         "Pre unilateral off-boarding: Alice offchain balance: {alice_offchain_balance}"
     );
 
-    alice.unilateral_off_board().await.unwrap();
+    alice.commit_vtxos_on_chain().await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 

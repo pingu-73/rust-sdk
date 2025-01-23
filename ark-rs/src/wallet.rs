@@ -1,5 +1,5 @@
-use crate::boarding_output::BoardingOutput;
 use crate::error::Error;
+use ark_core::BoardingOutput;
 use bitcoin::secp256k1::schnorr::Signature;
 use bitcoin::secp256k1::Message;
 use bitcoin::secp256k1::SecretKey;
@@ -13,7 +13,7 @@ use bitcoin::XOnlyPublicKey;
 
 pub trait BoardingWallet {
     fn new_boarding_output(
-        &mut self,
+        &self,
         asp_pubkey: XOnlyPublicKey,
         exit_delay: bitcoin::Sequence,
         descriptor_template: &str,
@@ -22,22 +22,18 @@ pub trait BoardingWallet {
 
     fn get_boarding_outputs(&self) -> Result<Vec<BoardingOutput>, Error>;
 
-    fn sign_boarding_output(
-        &self,
-        boarding_output: &BoardingOutput,
-        msg: &Message,
-    ) -> Result<(Signature, XOnlyPublicKey), Error>;
+    fn sign_for_pk(&self, pk: &XOnlyPublicKey, msg: &Message) -> Result<Signature, Error>;
 }
 
 pub trait OnchainWallet {
-    fn get_onchain_address(&mut self) -> Result<Address, Error>;
+    fn get_onchain_address(&self) -> Result<Address, Error>;
 
-    fn sync(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send;
+    fn sync(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send;
 
     fn balance(&self) -> Result<Balance, Error>;
 
     fn prepare_send_to_address(
-        &mut self,
+        &self,
         address: Address,
         amount: Amount,
         fee_rate: FeeRate,
@@ -53,14 +49,14 @@ pub trait OnchainWallet {
 
 pub trait Persistence {
     fn save_boarding_output(
-        &mut self,
+        &self,
         sk: SecretKey,
         boarding_output: BoardingOutput,
     ) -> Result<(), Error>;
 
     fn load_boarding_outputs(&self) -> Result<Vec<BoardingOutput>, Error>;
 
-    fn sk_for_boarding_output(&self, boarding_output: &BoardingOutput) -> Result<SecretKey, Error>;
+    fn sk_for_pk(&self, pk: &XOnlyPublicKey) -> Result<SecretKey, Error>;
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -9,7 +9,7 @@ use bitcoin::VarInt;
 pub fn compute_forfeit_min_relay_fee(
     fee_rate_sats_per_kvb: u64,
     vtxo: &DefaultVtxo,
-    forfeit_address: Address,
+    forfeit_address: &Address,
 ) -> Amount {
     const INPUT_SIZE: u64 = 32 + 4 + 1 + 4;
     const P2PKH_SCRIPT_SIG_SIZE: u64 = 1 + 73 + 1 + 33;

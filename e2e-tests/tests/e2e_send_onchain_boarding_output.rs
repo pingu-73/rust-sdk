@@ -44,8 +44,7 @@ pub async fn send_onchain_boarding_output() {
         let asp_pk = alice_asp_info.pk;
         let (asp_pk, _) = asp_pk.inner.x_only_public_key();
 
-        let mut wallet = alice_wallet.lock().await;
-        wallet
+        alice_wallet
             .new_boarding_output(
                 asp_pk,
                 alice_asp_info.round_lifetime,

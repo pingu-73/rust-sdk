@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use ark_bdk_wallet::Wallet;
-use ark_rs::boarding_output::BoardingOutput;
+use ark_core::BoardingOutput;
 use ark_rs::wallet::BoardingWallet;
 use ark_rs::Client;
 use bitcoin::key::Keypair;
@@ -15,8 +15,8 @@ use common::Nigiri;
 use rand::rngs::StdRng;
 use rand::thread_rng;
 use rand::SeedableRng;
+use std::borrow::Borrow;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio::try_join;
 
 mod common;
@@ -55,9 +55,9 @@ pub async fn multi_party_e2e() {
     )
     .await;
 
-    let alice_boarding_output = new_boarding_output(&alice, &alice_wallet).await;
-    let bob_boarding_output = new_boarding_output(&bob, &bob_wallet).await;
-    let claire_boarding_output = new_boarding_output(&claire, &claire_wallet).await;
+    let alice_boarding_output = new_boarding_output(&alice, alice_wallet).await;
+    let bob_boarding_output = new_boarding_output(&bob, bob_wallet).await;
+    let claire_boarding_output = new_boarding_output(&claire, claire_wallet).await;
 
     let alice_initial_balance = Amount::ONE_BTC;
     let alice_boarding_output = nigiri
@@ -119,12 +119,15 @@ pub async fn multi_party_e2e() {
 
     let alice_task = tokio::spawn(async move {
         tracing::debug!("Alice is sending {amount} to Bob offchain...");
-        alice.send_oor(bob_offchain_address, amount).await.unwrap();
+        alice.send_vtxo(bob_offchain_address, amount).await.unwrap();
         alice
     });
     let claire_task = tokio::spawn(async move {
         tracing::debug!("Claire is sending {amount} to Bob offchain...");
-        claire.send_oor(bob_offchain_address, amount).await.unwrap();
+        claire
+            .send_vtxo(bob_offchain_address, amount)
+            .await
+            .unwrap();
         claire
     });
 
@@ -142,19 +145,19 @@ pub async fn multi_party_e2e() {
 
 async fn new_boarding_output(
     client: &Client<Nigiri, Wallet<InMemoryDb>>,
-    alice_wallet: &Arc<Mutex<Wallet<InMemoryDb>>>,
+    wallet: impl Borrow<Wallet<InMemoryDb>>,
 ) -> BoardingOutput {
-    let alice_asp_info = client.asp_info.clone();
-    let asp_pk = alice_asp_info.pk;
+    let asp_info = client.asp_info.clone();
+    let asp_pk = asp_info.pk;
     let (asp_pk, _) = asp_pk.inner.x_only_public_key();
 
-    let mut wallet = alice_wallet.lock().await;
     wallet
+        .borrow()
         .new_boarding_output(
             asp_pk,
-            alice_asp_info.round_lifetime,
-            &alice_asp_info.boarding_descriptor_template,
-            alice_asp_info.network,
+            asp_info.round_lifetime,
+            &asp_info.boarding_descriptor_template,
+            asp_info.network,
         )
         .unwrap()
 }

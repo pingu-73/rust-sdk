@@ -66,7 +66,7 @@ impl TxWeightEstimator {
     /// Add an input with Tapscript details to the transaction.
     ///
     /// Updates the weight estimate to account for an additional
-    /// input spending a segwit v1 pay-to-taproot output using the script path. This
+    /// input spending a segwit v1 pay-to-Taproot output using the script path. This
     /// accepts the total size of the witness for the script leaf that is executed
     /// and adds the size of the control block to the total witness size.
     ///

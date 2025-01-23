@@ -1,4 +1,4 @@
-use crate::error::Error;
+use crate::Error;
 use bech32::Bech32m;
 use bech32::Hrp;
 use bitcoin::key::TweakedPublicKey;
@@ -69,8 +69,8 @@ mod tests {
     use bitcoin::hex::DisplayHex;
 
     // Taken from https://github.com/ark-network/ark/blob/b536a9e65252573aaa48110ef5d0c90894eb550c/common/fixtures/encoding.json.
-    #[tokio::test]
-    pub async fn roundtrip() {
+    #[test]
+    fn roundtrip() {
         let address = "tark1x0lm8hhr2wc6n6lyemtyh9rz8rg2ftpkfun46aca56kjg3ws0tsztfpuanaquxc6faedvjk3tax0575y6perapg3e95654pk8r4fjecs5fyd2";
 
         let decoded = ArkAddress::decode(address).unwrap();
