@@ -18,6 +18,8 @@ use ark_core::round::sign_round_psbt;
 use ark_core::round::sign_vtxo_tree;
 use ark_core::round::NonceTree;
 use ark_core::ArkAddress;
+use backon::ExponentialBuilder;
+use backon::Retryable;
 use bitcoin::key::Keypair;
 use bitcoin::secp256k1;
 use bitcoin::secp256k1::schnorr;
@@ -42,7 +44,7 @@ where
     /// confirmed VTXOs. We do this by "joining the next round".
     pub async fn board<R>(&self, rng: &mut R) -> Result<(), Error>
     where
-        R: Rng + CryptoRng,
+        R: Rng + CryptoRng + Clone,
     {
         // Get off-chain address and send all funds to this address, no change output 🦄
         let (to_address, _) = self.get_offchain_address();
@@ -56,33 +58,33 @@ where
             "Attempting to board the ark"
         );
 
-        // Joining a round is likely to fail depending on the timing, so we keep retrying.
-        //
-        // TODO: Consider not retrying on all errors. We should use backoff and only retry on
-        // ephemeral errors.
-        let txid = loop {
-            match self
-                .join_next_ark_round(
-                    rng,
-                    boarding_inputs.clone(),
-                    vtxo_inputs.clone(),
-                    RoundOutputType::Board {
-                        to_address,
-                        to_amount: total_amount,
-                    },
-                )
-                .await
-            {
-                Ok(txid) => {
-                    break txid;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to join the round: {e}. Retrying");
-                }
-            }
-
-            sleep(Duration::from_secs(1)).await;
+        let join_next_ark_round = || async {
+            self.join_next_ark_round(
+                &mut rng.clone(),
+                boarding_inputs.clone(),
+                vtxo_inputs.clone(),
+                RoundOutputType::Board {
+                    to_address,
+                    to_amount: total_amount,
+                },
+            )
+            .await
         };
+
+        // Joining a round can fail depending on the timing, so we try a few times.
+        let txid = join_next_ark_round
+            .retry(ExponentialBuilder::default().with_max_times(5))
+            .sleep(sleep)
+            // TODO: Use `when` to only retry certain errors.
+            .notify(|err: &Error, dur: Duration| {
+                tracing::warn!(
+                    "Retrying joining next Ark round after {:?}. Error: {:?}",
+                    dur,
+                    err,
+                );
+            })
+            .await
+            .context("Failed to join round")?;
 
         tracing::info!(%txid, "Boarding success");
 
@@ -97,7 +99,7 @@ where
         to_amount: Amount,
     ) -> Result<Txid, Error>
     where
-        R: Rng + CryptoRng,
+        R: Rng + CryptoRng + Clone,
     {
         let (change_address, _) = self.get_offchain_address();
 
@@ -117,32 +119,35 @@ where
             "Attempting to off-board the ark"
         );
 
-        // Joining a round is likely to fail depending on the timing, so we keep retrying.
-        let txid = loop {
-            match self
-                .join_next_ark_round(
-                    rng,
-                    boarding_inputs.clone(),
-                    vtxo_inputs.clone(),
-                    RoundOutputType::OffBoard {
-                        to_address: to_address.clone(),
-                        to_amount,
-                        change_address,
-                        change_amount,
-                    },
-                )
-                .await
-            {
-                Ok(txid) => {
-                    break txid;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to join the round: {e:?}. Retrying");
-                }
-            }
-
-            sleep(Duration::from_secs(1)).await;
+        let join_next_ark_round = || async {
+            self.join_next_ark_round(
+                &mut rng.clone(),
+                boarding_inputs.clone(),
+                vtxo_inputs.clone(),
+                RoundOutputType::OffBoard {
+                    to_address: to_address.clone(),
+                    to_amount,
+                    change_address,
+                    change_amount,
+                },
+            )
+            .await
         };
+
+        // Joining a round can fail depending on the timing, so we try a few times.
+        let txid = join_next_ark_round
+            .retry(ExponentialBuilder::default().with_max_times(5))
+            .sleep(sleep)
+            // TODO: Use `when` to only retry certain errors.
+            .notify(|err: &Error, dur: Duration| {
+                tracing::warn!(
+                    "Retrying joining next Ark round after {:?}. Error: {:?}",
+                    dur,
+                    err,
+                );
+            })
+            .await
+            .context("Failed to join round")?;
 
         tracing::info!(%txid, "Off-boarding success");
 
