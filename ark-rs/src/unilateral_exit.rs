@@ -9,6 +9,8 @@ use crate::Client;
 use ark_core::unilateral_exit;
 use ark_core::unilateral_exit::create_unilateral_exit_transaction;
 use ark_core::unilateral_exit::prepare_vtxo_tree_transactions;
+use backon::ExponentialBuilder;
+use backon::Retryable;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::Transaction;
@@ -82,13 +84,19 @@ where
             let is_not_published = blockchain.find_tx(&txid).await?.is_none();
             if is_not_published {
                 tracing::info!(%txid, "Broadcasting VTXO transaction");
+                let broadcast = || async { blockchain.broadcast(tx).await };
 
-                while let Err(e) = blockchain.broadcast(tx).await {
-                    tracing::warn!(%txid, "Error broadcasting VTXO transaction: {e:?}");
-
-                    // TODO: Should only retry specific errors.
-                    sleep(Duration::from_secs(1)).await;
-                }
+                broadcast
+                    .retry(ExponentialBuilder::default().with_max_times(5))
+                    .sleep(sleep)
+                    // TODO: Use `when` to only retry certain errors.
+                    .notify(|err: &Error, dur: Duration| {
+                        tracing::warn!(
+                            "Retrying broadcasting VTXO transaction {txid} after {dur:?}. Error: {err}",
+                        );
+                    })
+                    .await
+                    .with_context(|| format!("Failed to broadcast VTXO transaction {txid}"))?;
 
                 tracing::info!(%txid, i, total_txs = off_board_txs_len, "Broadcasted VTXO transaction");
             }

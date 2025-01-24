@@ -73,15 +73,11 @@ where
 
         // Joining a round can fail depending on the timing, so we try a few times.
         let txid = join_next_ark_round
-            .retry(ExponentialBuilder::default().with_max_times(5))
+            .retry(ExponentialBuilder::default().with_max_times(3))
             .sleep(sleep)
             // TODO: Use `when` to only retry certain errors.
             .notify(|err: &Error, dur: Duration| {
-                tracing::warn!(
-                    "Retrying joining next Ark round after {:?}. Error: {:?}",
-                    dur,
-                    err,
-                );
+                tracing::warn!("Retrying joining next Ark round after {dur:?}. Error: {err}",);
             })
             .await
             .context("Failed to join round")?;
@@ -136,15 +132,11 @@ where
 
         // Joining a round can fail depending on the timing, so we try a few times.
         let txid = join_next_ark_round
-            .retry(ExponentialBuilder::default().with_max_times(5))
+            .retry(ExponentialBuilder::default().with_max_times(3))
             .sleep(sleep)
             // TODO: Use `when` to only retry certain errors.
             .notify(|err: &Error, dur: Duration| {
-                tracing::warn!(
-                    "Retrying joining next Ark round after {:?}. Error: {:?}",
-                    dur,
-                    err,
-                );
+                tracing::warn!("Retrying joining next Ark round after {dur:?}. Error: {err}");
             })
             .await
             .context("Failed to join round")?;
