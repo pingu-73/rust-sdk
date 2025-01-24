@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ark-bdk-wallet = { path = "../ark-bdk-wallet" }
+ark-core = { path = "../ark-core" }
 ark-rs = { path = "../ark-rs" }
 async-stream = "0.3"
 base64 = "0.22.1"

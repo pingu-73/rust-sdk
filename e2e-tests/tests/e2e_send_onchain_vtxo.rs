@@ -48,8 +48,7 @@ pub async fn send_onchain_vtxo() {
         let asp_pk = alice_asp_info.pk;
         let (asp_pk, _) = asp_pk.inner.x_only_public_key();
 
-        let mut wallet = alice_wallet.lock().await;
-        wallet
+        alice_wallet
             .new_boarding_output(
                 asp_pk,
                 alice_asp_info.round_lifetime,
@@ -80,7 +79,7 @@ pub async fn send_onchain_vtxo() {
         "Pre unilateral off-boarding: Alice offchain balance: {offchain_balance}"
     );
 
-    alice.unilateral_off_board().await.unwrap();
+    alice.commit_vtxos_on_chain().await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 

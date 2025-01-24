@@ -1,10 +1,13 @@
 use crate::asp::Error;
 use crate::generated;
+use ark_core::asp::VtxoOutPoint;
+use base64::Engine;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::Network;
 use bitcoin::OutPoint;
+use bitcoin::Psbt;
 use bitcoin::PublicKey;
 
 #[derive(Clone, Debug)]
@@ -55,21 +58,6 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct VtxoOutPoint {
-    pub outpoint: Option<OutPoint>,
-    pub spent: bool,
-    pub round_txid: String,
-    pub spent_by: String,
-    pub expire_at: i64,
-    pub swept: bool,
-    pub is_pending: bool,
-    pub redeem_tx: String,
-    pub amount: Amount,
-    pub pubkey: String,
-    pub created_at: i64,
-}
-
 #[derive(Clone, Debug)]
 pub struct ListVtxo {
     pub spent: Vec<VtxoOutPoint>,
@@ -80,6 +68,22 @@ impl TryFrom<&generated::ark::v1::Vtxo> for VtxoOutPoint {
     type Error = Error;
 
     fn try_from(value: &generated::ark::v1::Vtxo) -> Result<Self, Self::Error> {
+        let redeem_tx = match value.redeem_tx.is_empty() {
+            true => None,
+            false => {
+                let base64 = base64::engine::GeneralPurpose::new(
+                    &base64::alphabet::STANDARD,
+                    base64::engine::GeneralPurposeConfig::new(),
+                );
+
+                let psbt = base64
+                    .decode(value.redeem_tx.clone())
+                    .map_err(Error::conversion)?;
+                let psbt = Psbt::deserialize(&psbt).map_err(Error::conversion)?;
+                Some(psbt)
+            }
+        };
+
         Ok(VtxoOutPoint {
             outpoint: value
                 .outpoint
@@ -92,12 +96,12 @@ impl TryFrom<&generated::ark::v1::Vtxo> for VtxoOutPoint {
                 })
                 .transpose()?,
             spent: value.spent,
-            round_txid: value.round_txid.clone(),
+            round_txid: value.round_txid.parse().map_err(Error::conversion)?,
             spent_by: value.spent_by.clone(),
             expire_at: value.expire_at,
             swept: value.swept,
             is_pending: value.is_pending,
-            redeem_tx: value.redeem_tx.clone(),
+            redeem_tx,
             amount: Amount::from_sat(value.amount),
             pubkey: value.pubkey.clone(),
             created_at: value.created_at,

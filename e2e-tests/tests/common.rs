@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
-use ark_rs::boarding_output::BoardingOutput;
+use ark_core::BoardingOutput;
 use ark_rs::error::Error;
 use ark_rs::wallet::Persistence;
 use ark_rs::Blockchain;
@@ -18,12 +18,13 @@ use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Transaction;
 use bitcoin::Txid;
+use bitcoin::XOnlyPublicKey;
 use regex::Regex;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Once;
-use tokio::sync::Mutex;
+use std::sync::RwLock;
 
 pub struct Nigiri {
     esplora_client: esplora_client::BlockingClient,
@@ -189,36 +190,41 @@ impl Blockchain for Nigiri {
 
 #[derive(Default)]
 pub struct InMemoryDb {
-    boarding_outputs: Vec<(SecretKey, BoardingOutput)>,
+    boarding_outputs: RwLock<Vec<(SecretKey, BoardingOutput)>>,
 }
 
 impl Persistence for InMemoryDb {
     fn save_boarding_output(
-        &mut self,
+        &self,
         sk: SecretKey,
         boarding_output: BoardingOutput,
     ) -> Result<(), Error> {
-        self.boarding_outputs.push((sk, boarding_output));
+        self.boarding_outputs
+            .write()
+            .unwrap()
+            .push((sk, boarding_output));
+
         Ok(())
     }
 
     fn load_boarding_outputs(&self) -> Result<Vec<BoardingOutput>, Error> {
         Ok(self
             .boarding_outputs
+            .read()
+            .unwrap()
             .clone()
             .into_iter()
-            .map(|(_, address)| address)
+            .map(|(_, b)| b)
             .collect())
     }
 
-    fn sk_for_boarding_output(&self, boarding_output: &BoardingOutput) -> Result<SecretKey, Error> {
-        let maybe_sk = self.boarding_outputs.iter().find_map(|(sk, b)| {
-            if b == boarding_output {
-                Some(*sk)
-            } else {
-                None
-            }
-        });
+    fn sk_for_pk(&self, pk: &XOnlyPublicKey) -> Result<SecretKey, Error> {
+        let maybe_sk = self
+            .boarding_outputs
+            .read()
+            .unwrap()
+            .iter()
+            .find_map(|(sk, b)| if b.owner_pk() == *pk { Some(*sk) } else { None });
         let secret_key = maybe_sk.unwrap();
         Ok(secret_key)
     }
@@ -231,13 +237,13 @@ pub async fn set_up_client(
     secp: Secp256k1<All>,
 ) -> (
     Client<Nigiri, ark_bdk_wallet::Wallet<InMemoryDb>>,
-    Arc<Mutex<ark_bdk_wallet::Wallet<InMemoryDb>>>,
+    Arc<ark_bdk_wallet::Wallet<InMemoryDb>>,
 ) {
     let db = InMemoryDb::default();
     let wallet =
         ark_bdk_wallet::Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db)
             .unwrap();
-    let wallet = Arc::new(Mutex::new(wallet));
+    let wallet = Arc::new(wallet);
 
     let client = OfflineClient::new(
         name,

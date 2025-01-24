@@ -1,3 +1,4 @@
+use crate::ark_address::ArkAddress;
 use crate::script::csv_sig_script;
 use crate::script::multisig_script;
 use crate::script::tr_script_pubkey;
@@ -16,22 +17,31 @@ use bitcoin::ScriptBuf;
 use bitcoin::XOnlyPublicKey;
 use std::time::Duration;
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct BoardingOutput {
+const DEFAULT_VTXO_DESCRIPTOR_TEMPLATE: &str =
+    "tr(UNSPENDABLE_KEY,{and(pk(USER),pk(ASP)),and(older(TIMEOUT),pk(USER))})";
+
+/// All the information needed to _spend_ a default VTXO.
+#[derive(Debug, Clone)]
+pub struct DefaultVtxo {
     asp: XOnlyPublicKey,
     owner: XOnlyPublicKey,
     spend_info: TaprootSpendInfo,
-    address: Address,
     ark_descriptor: String,
+    address: Address,
     exit_delay: bitcoin::Sequence,
+    exit_delay_seconds: u64,
+    network: Network,
 }
 
-impl BoardingOutput {
+impl DefaultVtxo {
+    /// 64 bytes per pubkey. In the default VTXO we have 2 pubkeys
+    pub const FORFEIT_WITNESS_SIZE: usize = 64 * 2;
+
+    /// Build a default VTXO.
     pub fn new<C>(
         secp: &Secp256k1<C>,
         asp: XOnlyPublicKey,
         owner: XOnlyPublicKey,
-        boarding_descriptor_template: &str,
         exit_delay: bitcoin::Sequence,
         network: Network,
     ) -> Self
@@ -41,19 +51,26 @@ impl BoardingOutput {
         let unspendable_key: PublicKey = UNSPENDABLE_KEY.parse().expect("valid key");
         let (unspendable_key, _) = unspendable_key.inner.x_only_public_key();
 
-        let multisig_script = multisig_script(asp, owner);
-        let exit_script = csv_sig_script(exit_delay, owner);
+        let forfeit_script = multisig_script(asp, owner);
+        let redeem_script = csv_sig_script(exit_delay, owner);
 
         let spend_info = TaprootBuilder::new()
-            .add_leaf(1, multisig_script)
-            .expect("valid multisig leaf")
-            .add_leaf(1, exit_script)
-            .expect("valid exit leaf")
+            .add_leaf(1, forfeit_script)
+            .expect("valid forfeit leaf")
+            .add_leaf(1, redeem_script)
+            .expect("valid redeem leaf")
             .finalize(secp, unspendable_key)
             .expect("can be finalized");
 
-        let ark_descriptor =
-            boarding_descriptor_template.replace("USER", owner.to_string().as_str());
+        let exit_delay_seconds = match exit_delay.to_relative_lock_time() {
+            Some(relative::LockTime::Time(time)) => time.value() * 512,
+            _ => unreachable!("default VTXO redeem script must use relative lock time in seconds"),
+        };
+        let ark_descriptor = DEFAULT_VTXO_DESCRIPTOR_TEMPLATE
+            .replace("UNSPENDABLE_KEY", unspendable_key.to_string().as_str())
+            .replace("USER", owner.to_string().as_str())
+            .replace("ASP", asp.to_string().as_str())
+            .replace("TIMEOUT", exit_delay_seconds.to_string().as_str());
 
         let script_pubkey = tr_script_pubkey(&spend_info);
         let address = Address::from_script(&script_pubkey, network).expect("valid script");
@@ -62,25 +79,48 @@ impl BoardingOutput {
             asp,
             owner,
             spend_info,
-            address,
             ark_descriptor,
+            address,
             exit_delay,
+            exit_delay_seconds: exit_delay_seconds as u64,
+            network,
         }
     }
 
-    pub fn address(&self) -> &Address {
-        &self.address
+    pub fn spend_info(&self) -> &TaprootSpendInfo {
+        &self.spend_info
     }
 
     pub fn ark_descriptor(&self) -> &str {
         &self.ark_descriptor
     }
 
+    pub fn script_pubkey(&self) -> ScriptBuf {
+        self.address.script_pubkey()
+    }
+
+    pub fn address(&self) -> &Address {
+        &self.address
+    }
+
+    pub fn exit_delay(&self) -> bitcoin::Sequence {
+        self.exit_delay
+    }
+
+    pub fn exit_delay_duration(&self) -> Duration {
+        Duration::from_secs(self.exit_delay_seconds)
+    }
+
+    pub fn to_ark_address(&self) -> ArkAddress {
+        let vtxo_tap_key = self.spend_info.output_key();
+        ArkAddress::new(self.network, self.asp, vtxo_tap_key)
+    }
+
+    /// The spend info for the forfeit branch of a default VTXO.
     pub fn forfeit_spend_info(&self) -> (ScriptBuf, taproot::ControlBlock) {
         // It's kind of rubbish that we need to reconstruct the script every time we want a
         // `ControlBlock`. It would be nicer to just get the `ControlBlock` for the left leaf and
         // the right leaf, knowing which one is which.
-
         let forfeit_script = self.forfeit_script();
 
         let control_block = self
@@ -91,6 +131,7 @@ impl BoardingOutput {
         (forfeit_script, control_block)
     }
 
+    /// The spend info for the exit branch of a default VTXO.
     pub fn exit_spend_info(&self) -> (ScriptBuf, taproot::ControlBlock) {
         let exit_script = self.exit_script();
 
@@ -102,29 +143,23 @@ impl BoardingOutput {
         (exit_script, control_block)
     }
 
-    pub fn exit_delay(&self) -> bitcoin::Sequence {
-        self.exit_delay
-    }
-
-    pub fn exit_delay_duration(&self) -> Duration {
-        let exit_delay = self
-            .exit_delay
-            .to_relative_lock_time()
-            .expect("relative lock time");
-
-        match exit_delay {
-            relative::LockTime::Time(time) => Duration::from_secs(time.value() as u64 * 512),
-            relative::LockTime::Blocks(_) => {
-                unreachable!("Only seconds timelock is supported");
-            }
-        }
-    }
-
     pub fn tapscripts(&self) -> Vec<ScriptBuf> {
         let (exit_script, _) = self.exit_spend_info();
         let (forfeit_script, _) = self.forfeit_spend_info();
 
         vec![exit_script, forfeit_script]
+    }
+
+    /// Whether the VTXO can be claimed unilaterally by the owner or not, given the
+    /// `confirmation_blocktime` of the transaction that included this VTXO as an output.
+    pub fn can_be_claimed_unilaterally_by_owner(
+        &self,
+        now: Duration,
+        confirmation_blocktime: Duration,
+    ) -> bool {
+        let exit_path_time = confirmation_blocktime + self.exit_delay_duration();
+
+        now > exit_path_time
     }
 
     fn forfeit_script(&self) -> ScriptBuf {

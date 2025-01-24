@@ -1,8 +1,6 @@
-use crate::ark_address::ArkAddress;
 use crate::asp::tree;
 use crate::asp::types::Info;
 use crate::asp::types::ListVtxo;
-use crate::asp::types::VtxoOutPoint;
 use crate::asp::Error;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
 use crate::generated::ark::v1::input::TaprootTree;
@@ -22,49 +20,25 @@ use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::generated::ark::v1::Tapscripts;
+use ark_core::asp::Node;
+use ark_core::asp::Round;
+use ark_core::asp::RoundInput;
+use ark_core::asp::RoundOutput;
+use ark_core::asp::Tree;
+use ark_core::asp::TreeLevel;
+use ark_core::asp::VtxoOutPoint;
+use ark_core::ArkAddress;
 use async_stream::stream;
 use base64::Engine;
 use bitcoin::hex::DisplayHex;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
-use bitcoin::ScriptBuf;
 use bitcoin::Txid;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use std::str::FromStr;
-
-#[derive(Debug)]
-pub struct RoundInputs {
-    pub outpoint: Option<OutPoint>,
-    // One script per branch of the taproot tree.
-    pub tapscripts: Vec<ScriptBuf>,
-}
-
-pub struct RoundOutputs {
-    // TODO: Would be cool to have a type here which accepts `ArkAddress` and `bitcoin::Address`.
-    pub address: String,
-    pub amount: Amount,
-}
-
-#[derive(Debug, Clone)]
-pub struct Tree {
-    pub levels: Vec<TreeLevel>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TreeLevel {
-    pub nodes: Vec<Node>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Node {
-    pub txid: Txid,
-    pub tx: Psbt,
-    pub parent_txid: Txid,
-}
 
 #[derive(Debug, Clone)]
 pub struct RoundFinalizationEvent {
@@ -108,17 +82,6 @@ pub enum RoundStreamEvent {
     RoundFailed(RoundFailedEvent),
     RoundSigning(RoundSigningEvent),
     RoundSigningNoncesGenerated(RoundSigningNoncesGeneratedEvent),
-}
-
-pub struct Round {
-    pub id: String,
-    pub start: i64,
-    pub end: i64,
-    pub round_tx: Psbt,
-    pub vtxo_tree: Option<Tree>,
-    pub forfeit_txs: Vec<Psbt>,
-    pub connectors: Vec<Psbt>,
-    pub stage: i32,
 }
 
 pub enum TransactionEvent {
@@ -210,17 +173,21 @@ impl Client {
     pub async fn register_inputs_for_next_round(
         &self,
         ephemeral_key: PublicKey,
-        inputs: Vec<RoundInputs>,
+        inputs: Vec<RoundInput>,
     ) -> Result<String, Error> {
         let mut client = self.inner_client()?;
 
         let inputs = inputs
             .iter()
             .map(|input| {
-                let scripts = input.tapscripts.iter().map(|s| s.to_hex_string()).collect();
+                let scripts = input
+                    .tapscripts()
+                    .iter()
+                    .map(|s| s.to_hex_string())
+                    .collect();
 
                 Input {
-                    outpoint: input.outpoint.map(|out| Outpoint {
+                    outpoint: input.outpoint().map(|out| Outpoint {
                         txid: out.txid.to_string(),
                         vout: out.vout,
                     }),
@@ -245,15 +212,15 @@ impl Client {
     pub async fn register_outputs_for_next_round(
         &self,
         request_id: String,
-        outpouts: Vec<RoundOutputs>,
+        outpouts: Vec<RoundOutput>,
     ) -> Result<(), Error> {
         let mut client = self.inner_client()?;
 
         let outputs = outpouts
             .iter()
             .map(|out| Output {
-                address: out.address.clone(),
-                amount: out.amount.to_sat(),
+                address: out.address().serialize(),
+                amount: out.amount().to_sat(),
             })
             .collect();
 
@@ -327,7 +294,7 @@ impl Client {
     pub async fn submit_tree_signatures(
         &self,
         round_id: String,
-        ephemeral_pubkey: zkp::PublicKey,
+        ephemeral_pubkey: PublicKey,
         partial_sig_tree: Vec<Vec<zkp::MusigPartialSignature>>,
     ) -> Result<(), Error> {
         let mut client = self.inner_client()?;

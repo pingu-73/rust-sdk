@@ -18,14 +18,14 @@ struct ErrorImpl {
 enum Kind {
     /// Ad-hoc error,
     AdHoc(AdHocError),
-    /// An error related to interactions with the ASP.
-    Asp(AspError),
-    /// An error from [`ark_core`].
-    Core(CoreError),
+    /// An error related to cryptography.
+    Crypto(CryptoError),
+    /// An error related to constructing Bitcoin transactions.
+    Transaction(TransactionError),
     /// An error related to coin selection of VTXOs and boarding outputs.
     CoinSelect(CoinSelectError),
-    /// An error related to actions within the wallet
-    Wallet(WalletError),
+    /// An error related to encoding or decoding an Ark address.
+    ArkAddress(ArkAddressError),
 }
 
 #[derive(Debug)]
@@ -34,13 +34,13 @@ struct AdHocError {
 }
 
 #[derive(Debug)]
-struct AspError {
+struct CryptoError {
     source: Source,
 }
 
 #[derive(Debug)]
-struct CoreError {
-    source: ark_core::Error,
+struct TransactionError {
+    source: Source,
 }
 
 #[derive(Debug)]
@@ -49,7 +49,7 @@ struct CoinSelectError {
 }
 
 #[derive(Debug)]
-struct WalletError {
+struct ArkAddressError {
     source: Source,
 }
 
@@ -60,14 +60,20 @@ impl Error {
         }
     }
 
-    pub(crate) fn ad_hoc(source: impl Into<Source>) -> Self {
+    pub fn ad_hoc(source: impl Into<Source>) -> Self {
         Error::new(Kind::AdHoc(AdHocError {
             source: source.into(),
         }))
     }
 
-    pub(crate) fn asp(source: impl Into<Source>) -> Self {
-        Error::new(Kind::Asp(AspError {
+    pub(crate) fn crypto(source: impl Into<Source>) -> Self {
+        Error::new(Kind::Crypto(CryptoError {
+            source: source.into(),
+        }))
+    }
+
+    pub(crate) fn transaction(source: impl Into<Source>) -> Self {
+        Error::new(Kind::Transaction(TransactionError {
             source: source.into(),
         }))
     }
@@ -78,8 +84,8 @@ impl Error {
         }))
     }
 
-    pub fn wallet(source: impl Into<Source>) -> Self {
-        Error::new(Kind::Wallet(WalletError {
+    pub(crate) fn address_format(source: impl Into<Source>) -> Self {
+        Error::new(Kind::ArkAddress(ArkAddressError {
             source: source.into(),
         }))
     }
@@ -104,10 +110,10 @@ impl fmt::Display for Kind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Kind::AdHoc(ref err) => err.fmt(f),
-            Kind::Asp(ref err) => err.fmt(f),
-            Kind::Core(ref err) => err.fmt(f),
+            Kind::Crypto(ref err) => err.fmt(f),
+            Kind::Transaction(ref err) => err.fmt(f),
             Kind::CoinSelect(ref err) => err.fmt(f),
-            Kind::Wallet(ref err) => err.fmt(f),
+            Kind::ArkAddress(ref err) => err.fmt(f),
         }
     }
 }
@@ -118,13 +124,13 @@ impl fmt::Display for AdHocError {
     }
 }
 
-impl fmt::Display for AspError {
+impl fmt::Display for CryptoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.source.fmt(f)
     }
 }
 
-impl fmt::Display for CoreError {
+impl fmt::Display for TransactionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.source.fmt(f)
     }
@@ -136,15 +142,9 @@ impl fmt::Display for CoinSelectError {
     }
 }
 
-impl fmt::Display for WalletError {
+impl fmt::Display for ArkAddressError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.source.fmt(f)
-    }
-}
-
-impl From<ark_core::Error> for Error {
-    fn from(value: ark_core::Error) -> Self {
-        Self::new(Kind::Core(CoreError { source: value }))
     }
 }
 

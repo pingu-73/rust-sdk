@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ark_rs::boarding_output::BoardingOutput;
+use ark_core::BoardingOutput;
 use ark_rs::error::Error;
 use ark_rs::error::ErrorContext;
 use ark_rs::wallet::Balance;
@@ -26,6 +26,8 @@ use bitcoin::Transaction;
 use bitcoin::XOnlyPublicKey;
 use std::collections::BTreeSet;
 use std::io::Write;
+use std::sync::Arc;
+use std::sync::RwLock;
 
 pub struct Wallet<DB>
 where
@@ -33,7 +35,7 @@ where
 {
     kp: Keypair,
     secp: Secp256k1<All>,
-    inner: BdkWallet,
+    inner: Arc<RwLock<BdkWallet>>,
     client: esplora_client::AsyncClient,
     db: DB,
 }
@@ -62,7 +64,7 @@ where
         Ok(Self {
             kp,
             secp,
-            inner: wallet,
+            inner: Arc::new(RwLock::new(wallet)),
             client,
             db,
         })
@@ -73,24 +75,33 @@ impl<DB> OnchainWallet for Wallet<DB>
 where
     DB: Persistence + Send + Sync,
 {
-    fn get_onchain_address(&mut self) -> Result<Address, Error> {
-        let info = self.inner.next_unused_address(KeychainKind::External);
+    fn get_onchain_address(&self) -> Result<Address, Error> {
+        let info = self
+            .inner
+            .write()
+            .expect("write lock")
+            .next_unused_address(KeychainKind::External);
 
         Ok(info.address)
     }
 
-    async fn sync(&mut self) -> Result<(), Error> {
-        let request = self.inner.start_full_scan().inspect({
-            let mut stdout = std::io::stdout();
-            let mut once = BTreeSet::<KeychainKind>::new();
-            move |keychain, spk_i, _| {
-                if once.insert(keychain) {
-                    tracing::trace!(?keychain, "Scanning keychain");
+    async fn sync(&self) -> Result<(), Error> {
+        let request = self
+            .inner
+            .read()
+            .expect("read lock")
+            .start_full_scan()
+            .inspect({
+                let mut stdout = std::io::stdout();
+                let mut once = BTreeSet::<KeychainKind>::new();
+                move |keychain, spk_i, _| {
+                    if once.insert(keychain) {
+                        tracing::trace!(?keychain, "Scanning keychain");
+                    }
+                    tracing::trace!(" {:<3}", spk_i);
+                    stdout.flush().expect("must flush")
                 }
-                tracing::trace!(" {:<3}", spk_i);
-                stdout.flush().expect("must flush")
-            }
-        });
+            });
 
         let now = std::time::UNIX_EPOCH
             .elapsed()
@@ -104,7 +115,10 @@ where
             .await
             .map_err(Error::wallet)
             .context("Failed syncing wallet")?;
+
         self.inner
+            .write()
+            .expect("write lock")
             .apply_update_at(update, now)
             .map_err(Error::wallet)?;
 
@@ -112,7 +126,7 @@ where
     }
 
     fn balance(&self) -> Result<Balance, Error> {
-        let balance = self.inner.balance();
+        let balance = self.inner.read().expect("read lock").balance();
 
         Ok(Balance {
             immature: balance.immature,
@@ -123,12 +137,13 @@ where
     }
 
     fn prepare_send_to_address(
-        &mut self,
+        &self,
         address: Address,
         amount: Amount,
         fee_rate: FeeRate,
     ) -> Result<Psbt, Error> {
-        let mut b = self.inner.build_tx();
+        let wallet = &mut self.inner.write().expect("write lock");
+        let mut b = wallet.build_tx();
         b.ordering(TxOrdering::Untouched);
         b.add_recipient(address.script_pubkey(), amount);
         b.fee_rate(fee_rate);
@@ -147,6 +162,8 @@ where
     fn sign(&self, psbt: &mut Psbt) -> Result<bool, Error> {
         let finalized = self
             .inner
+            .read()
+            .expect("read lock")
             .sign(psbt, SignOptions::default())
             .map_err(Error::wallet)?;
 
@@ -159,7 +176,7 @@ where
     DB: Persistence,
 {
     fn new_boarding_output(
-        &mut self,
+        &self,
         asp_pubkey: XOnlyPublicKey,
         exit_delay: bitcoin::Sequence,
         descriptor_template: &str,
@@ -188,22 +205,16 @@ where
         self.db.load_boarding_outputs()
     }
 
-    fn sign_boarding_output(
-        &self,
-        boarding_output: &BoardingOutput,
-        msg: &Message,
-    ) -> Result<(Signature, XOnlyPublicKey), Error> {
+    fn sign_for_pk(&self, pk: &XOnlyPublicKey, msg: &Message) -> Result<Signature, Error> {
         let key = self
             .db
-            .sk_for_boarding_output(boarding_output)
-            .context("Failed retrieving secret key for boarding output")?;
+            .sk_for_pk(pk)
+            .with_context(|| format!("Failed retrieving SK for PK {pk}"))?;
 
         let sig = self
             .secp
             .sign_schnorr_no_aux_rand(msg, &key.keypair(&self.secp));
 
-        let pk = key.x_only_public_key(&self.secp).0;
-
-        Ok((sig, pk))
+        Ok(sig)
     }
 }
