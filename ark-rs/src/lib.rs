@@ -1,6 +1,7 @@
 use crate::asp::ListVtxo;
 use crate::wallet::BoardingWallet;
 use crate::wallet::OnchainWallet;
+use ark_core::asp::Round;
 use ark_core::asp::VtxoOutPoint;
 use ark_core::default_vtxo::DefaultVtxo;
 use ark_core::ArkAddress;
@@ -169,6 +170,12 @@ where
         }
 
         Ok(vtxos)
+    }
+
+    pub async fn get_round(&self, round_txid: String) -> Result<Option<Round>, Error> {
+        let round = self.asp_client().get_round(round_txid).await?;
+
+        Ok(round)
     }
 
     pub async fn spendable_vtxos(&self) -> Result<Vec<(Vec<VtxoOutPoint>, DefaultVtxo)>, Error> {
