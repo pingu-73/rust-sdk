@@ -2,14 +2,11 @@
 
 use ark_rs::wallet::BoardingWallet;
 use bitcoin::address::NetworkUnchecked;
-use bitcoin::key::Keypair;
 use bitcoin::key::Secp256k1;
-use bitcoin::secp256k1::SecretKey;
 use bitcoin::Amount;
 use common::init_tracing;
 use common::set_up_client;
 use common::Nigiri;
-use rand::thread_rng;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -26,18 +23,9 @@ pub async fn send_onchain_boarding_output() {
     let nigiri = Arc::new(Nigiri::new(Some(outpoint_blocktime_offset)));
 
     let secp = Secp256k1::new();
-    let mut rng = thread_rng();
 
-    let alice_key = SecretKey::new(&mut rng);
-    let alice_keypair = Keypair::from_secret_key(&secp, &alice_key);
-
-    let (alice, alice_wallet) = set_up_client(
-        "alice".to_string(),
-        alice_keypair,
-        nigiri.clone(),
-        secp.clone(),
-    )
-    .await;
+    let (alice, alice_wallet) =
+        set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
 
     let alice_boarding_output = {
         let alice_asp_info = alice.asp_info.clone();

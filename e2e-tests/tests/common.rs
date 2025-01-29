@@ -19,6 +19,7 @@ use bitcoin::OutPoint;
 use bitcoin::Transaction;
 use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
+use rand::thread_rng;
 use regex::Regex;
 use std::process::Command;
 use std::str::FromStr;
@@ -232,13 +233,17 @@ impl Persistence for InMemoryDb {
 
 pub async fn set_up_client(
     name: String,
-    kp: Keypair,
     nigiri: Arc<Nigiri>,
     secp: Secp256k1<All>,
 ) -> (
     Client<Nigiri, ark_bdk_wallet::Wallet<InMemoryDb>>,
     Arc<ark_bdk_wallet::Wallet<InMemoryDb>>,
 ) {
+    let mut rng = thread_rng();
+
+    let sk = SecretKey::new(&mut rng);
+    let kp = Keypair::from_secret_key(&secp, &sk);
+
     let db = InMemoryDb::default();
     let wallet =
         ark_bdk_wallet::Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db)

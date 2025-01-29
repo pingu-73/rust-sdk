@@ -2,9 +2,7 @@
 
 use ark_rs::wallet::BoardingWallet;
 use bitcoin::address::NetworkUnchecked;
-use bitcoin::key::Keypair;
 use bitcoin::key::Secp256k1;
-use bitcoin::secp256k1::SecretKey;
 use bitcoin::Amount;
 use common::init_tracing;
 use common::set_up_client;
@@ -32,16 +30,8 @@ pub async fn send_onchain_vtxo() {
     let secp = Secp256k1::new();
     let mut rng = thread_rng();
 
-    let alice_key = SecretKey::new(&mut rng);
-    let alice_keypair = Keypair::from_secret_key(&secp, &alice_key);
-
-    let (alice, alice_wallet) = set_up_client(
-        "alice".to_string(),
-        alice_keypair,
-        nigiri.clone(),
-        secp.clone(),
-    )
-    .await;
+    let (alice, alice_wallet) =
+        set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
 
     let alice_boarding_output = {
         let alice_asp_info = alice.asp_info.clone();
@@ -66,17 +56,17 @@ pub async fn send_onchain_vtxo() {
 
     let offchain_balance = alice.offchain_balance().await.unwrap();
 
-    tracing::debug!("Pre boarding: Alice offchain balance: {offchain_balance}");
+    tracing::debug!("Pre boarding: Alice offchain balance: {offchain_balance:?}");
 
     alice.board(&mut rng).await.unwrap();
 
     let offchain_balance = alice.offchain_balance().await.unwrap();
-    tracing::debug!("Post boarding: Alice offchain balance: {offchain_balance}");
+    tracing::debug!("Post boarding: Alice offchain balance: {offchain_balance:?}");
 
     let alice_vtxos = alice.list_vtxos().await.unwrap();
     tracing::debug!(
         ?alice_vtxos,
-        "Pre unilateral off-boarding: Alice offchain balance: {offchain_balance}"
+        "Pre unilateral off-boarding: Alice offchain balance: {offchain_balance:?}"
     );
 
     alice.commit_vtxos_on_chain().await.unwrap();
@@ -88,7 +78,7 @@ pub async fn send_onchain_vtxo() {
 
     tracing::debug!(
         ?alice_vtxos,
-        "Post unilateral off-boarding: Alice offchain balance: {alice_offchain_balance}"
+        "Post unilateral off-boarding: Alice offchain balance: {alice_offchain_balance:?}"
     );
 
     // Get one confirmation on the VTXO.

@@ -5,6 +5,7 @@ use ark_core::asp::Round;
 use ark_core::asp::VtxoOutPoint;
 use ark_core::default_vtxo::DefaultVtxo;
 use ark_core::ArkAddress;
+use ark_core::BoardingOutput;
 use bitcoin::key::Keypair;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::All;
@@ -78,6 +79,26 @@ pub struct ExplorerUtxo {
     pub confirmation_blocktime: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OffChainBalance {
+    pending: Amount,
+    confirmed: Amount,
+}
+
+impl OffChainBalance {
+    pub fn pending(&self) -> Amount {
+        self.pending
+    }
+
+    pub fn confirmed(&self) -> Amount {
+        self.confirmed
+    }
+
+    pub fn total(&self) -> Amount {
+        self.pending + self.confirmed
+    }
+}
+
 pub trait Blockchain {
     fn find_outpoints(
         &self,
@@ -122,6 +143,12 @@ where
         self.asp_client.connect().await?;
         let asp_info = self.asp_client.get_info().await?;
 
+        tracing::debug!(
+            name = self.name,
+            asp_url = ?self.asp_client,
+            "Connected to Ark server"
+        );
+
         Ok(Client {
             inner: self,
             asp_info,
@@ -158,6 +185,16 @@ where
         let address = self.get_offchain_address();
 
         vec![address]
+    }
+
+    pub fn get_boarding_output(&self) -> Result<BoardingOutput, Error> {
+        let asp_info = &self.asp_info;
+        self.inner.wallet.new_boarding_output(
+            asp_info.pk.inner.x_only_public_key().0,
+            asp_info.unilateral_exit_delay,
+            &asp_info.boarding_descriptor_template,
+            asp_info.network,
+        )
     }
 
     pub async fn list_vtxos(&self) -> Result<Vec<ListVtxo>, Error> {
@@ -224,12 +261,21 @@ where
         Ok(spendable)
     }
 
-    pub async fn offchain_balance(&self) -> Result<Amount, Error> {
+    pub async fn offchain_balance(&self) -> Result<OffChainBalance, Error> {
         let list = self.spendable_vtxos().await?;
-        let sum = list
-            .iter()
-            .flat_map(|(vtxos, _)| vtxos)
-            .fold(Amount::ZERO, |acc, x| acc + x.amount);
+        let sum =
+            list.iter()
+                .flat_map(|(vtxos, _)| vtxos)
+                .fold(OffChainBalance::default(), |acc, x| match x.is_pending {
+                    true => OffChainBalance {
+                        pending: acc.pending + x.amount,
+                        ..acc
+                    },
+                    false => OffChainBalance {
+                        confirmed: acc.confirmed + x.amount,
+                        ..acc
+                    },
+                });
 
         Ok(sum)
     }

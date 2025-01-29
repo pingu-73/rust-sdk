@@ -4,16 +4,13 @@ use ark_bdk_wallet::Wallet;
 use ark_core::BoardingOutput;
 use ark_rs::wallet::BoardingWallet;
 use ark_rs::Client;
-use bitcoin::key::Keypair;
 use bitcoin::key::Secp256k1;
-use bitcoin::secp256k1::SecretKey;
 use bitcoin::Amount;
 use common::init_tracing;
 use common::set_up_client;
 use common::InMemoryDb;
 use common::Nigiri;
 use rand::rngs::StdRng;
-use rand::thread_rng;
 use rand::SeedableRng;
 use std::borrow::Borrow;
 use std::sync::Arc;
@@ -28,32 +25,14 @@ pub async fn multi_party_e2e() {
     let nigiri = Arc::new(Nigiri::default());
 
     let secp = Secp256k1::new();
-    let mut rng = thread_rng();
 
-    let alice_key = SecretKey::new(&mut rng);
-    let alice_keypair = Keypair::from_secret_key(&secp, &alice_key);
-    let (alice, alice_wallet) = set_up_client(
-        "alice".to_string(),
-        alice_keypair,
-        nigiri.clone(),
-        secp.clone(),
-    )
-    .await;
+    let (alice, alice_wallet) =
+        set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
 
-    let bob_key = SecretKey::new(&mut rng);
-    let bob_keypair = Keypair::from_secret_key(&secp, &bob_key);
-    let (bob, bob_wallet) =
-        set_up_client("bob".to_string(), bob_keypair, nigiri.clone(), secp.clone()).await;
+    let (bob, bob_wallet) = set_up_client("bob".to_string(), nigiri.clone(), secp.clone()).await;
 
-    let claire_key = SecretKey::new(&mut rng);
-    let claire_keypair = Keypair::from_secret_key(&secp, &claire_key);
-    let (claire, claire_wallet) = set_up_client(
-        "claire".to_string(),
-        claire_keypair,
-        nigiri.clone(),
-        secp.clone(),
-    )
-    .await;
+    let (claire, claire_wallet) =
+        set_up_client("claire".to_string(), nigiri.clone(), secp.clone()).await;
 
     let alice_boarding_output = new_boarding_output(&alice, alice_wallet).await;
     let bob_boarding_output = new_boarding_output(&bob, bob_wallet).await;
@@ -81,9 +60,9 @@ pub async fn multi_party_e2e() {
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
     let bob_offchain_balance = bob.offchain_balance().await.unwrap();
     let claire_offchain_balance = claire.offchain_balance().await.unwrap();
-    tracing::debug!("Pre boarding: Alice offchain balance: {alice_offchain_balance}");
-    tracing::debug!("Pre boarding: Bob offchain balance: {bob_offchain_balance}");
-    tracing::debug!("Pre boarding: Claire offchain balance: {claire_offchain_balance}");
+    tracing::debug!("Pre boarding: Alice offchain balance: {alice_offchain_balance:?}");
+    tracing::debug!("Pre boarding: Bob offchain balance: {bob_offchain_balance:?}");
+    tracing::debug!("Pre boarding: Claire offchain balance: {claire_offchain_balance:?}");
 
     let alice_task = tokio::spawn(async move {
         let mut rng = StdRng::from_entropy();
@@ -108,9 +87,9 @@ pub async fn multi_party_e2e() {
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
     let bob_offchain_balance = bob.offchain_balance().await.unwrap();
     let claire_offchain_balance = claire.offchain_balance().await.unwrap();
-    tracing::debug!("Post boarding: Alice offchain balance: {alice_offchain_balance}");
-    tracing::debug!("Post boarding: Bob offchain balance: {bob_offchain_balance}");
-    tracing::debug!("Post boarding: Claire offchain balance: {claire_offchain_balance}");
+    tracing::debug!("Post boarding: Alice offchain balance: {alice_offchain_balance:?}");
+    tracing::debug!("Post boarding: Bob offchain balance: {bob_offchain_balance:?}");
+    tracing::debug!("Post boarding: Claire offchain balance: {claire_offchain_balance:?}");
 
     let (bob_offchain_address, _) = bob.get_offchain_address();
     let amount = Amount::from_sat(100_000);
@@ -137,10 +116,13 @@ pub async fn multi_party_e2e() {
     let bob_vtxos = bob.list_vtxos().await.unwrap();
     tracing::debug!(
         ?bob_vtxos,
-        "Post payment: Bob offchain balance: {bob_offchain_balance}"
+        "Post payment: Bob offchain balance: {bob_offchain_balance:?}"
     );
 
-    assert_eq!(bob_offchain_balance, bob_initial_balance + amount * 2);
+    assert_eq!(
+        bob_offchain_balance.total(),
+        bob_initial_balance + amount * 2
+    );
 }
 
 async fn new_boarding_output(
