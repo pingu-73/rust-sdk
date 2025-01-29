@@ -20,7 +20,7 @@ mod common;
 
 #[tokio::test]
 #[ignore]
-pub async fn multi_party_e2e() {
+pub async fn concurrent_boarding() {
     init_tracing();
     let nigiri = Arc::new(Nigiri::default());
 
