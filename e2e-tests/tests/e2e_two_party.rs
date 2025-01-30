@@ -14,7 +14,7 @@ mod common;
 #[ignore]
 pub async fn e2e() {
     init_tracing();
-    let nigiri = Arc::new(Nigiri::default());
+    let nigiri = Arc::new(Nigiri::new());
 
     let secp = Secp256k1::new();
     let mut rng = thread_rng();

@@ -29,21 +29,22 @@ use std::sync::RwLock;
 
 pub struct Nigiri {
     esplora_client: esplora_client::BlockingClient,
-    /// By how much we _reduce_ the block time of outpoints.
+    /// By how much we _reduce_ the block time of outpoints. A lower block time indicates that an
+    /// outpoint was confirmed longer ago.
     ///
     /// This can be used to ensure that certain outpoints are considered spendable, which is useful
     /// for testing scripts with opcodes such as `OP_CSV`.
-    outpoint_blocktime_offset: Option<u64>,
+    outpoint_blocktime_offset: RwLock<u64>,
 }
 
 impl Nigiri {
-    pub fn new(outpoint_blocktime_offset: Option<u64>) -> Self {
+    pub fn new() -> Self {
         let builder = esplora_client::Builder::new("http://localhost:30000");
         let esplora_client = builder.build_blocking();
 
         Self {
             esplora_client,
-            outpoint_blocktime_offset,
+            outpoint_blocktime_offset: RwLock::new(0),
         }
     }
 
@@ -97,6 +98,12 @@ impl Nigiri {
     }
 
     #[allow(unused)]
+    pub fn set_outpoint_blocktime_offset(&self, outpoint_blocktime_offset: u64) {
+        let mut guard = self.outpoint_blocktime_offset.write().unwrap();
+        *guard = outpoint_blocktime_offset;
+    }
+
+    #[allow(unused)]
     pub async fn mine(&self, n: u32) {
         for i in 0..n {
             self.faucet_fund(
@@ -106,15 +113,15 @@ impl Nigiri {
                 Amount::from_sat(10_000),
             )
             .await;
-
-            tracing::debug!(i, "Mined a block");
         }
+
+        tracing::debug!(n, "Mined blocks");
     }
 }
 
 impl Default for Nigiri {
     fn default() -> Self {
-        Self::new(None)
+        Self::new()
     }
 }
 
@@ -131,12 +138,10 @@ impl Blockchain for Nigiri {
             .flat_map(|tx| {
                 let txid = tx.txid;
 
-                let confirmation_blocktime =
-                    if let Some(blocktime_fastforward) = self.outpoint_blocktime_offset {
-                        tx.status.block_time.map(|t| t - blocktime_fastforward)
-                    } else {
-                        tx.status.block_time
-                    };
+                let confirmation_blocktime = tx
+                    .status
+                    .block_time
+                    .map(|t| t - *self.outpoint_blocktime_offset.read().unwrap());
 
                 tx.vout
                     .iter()

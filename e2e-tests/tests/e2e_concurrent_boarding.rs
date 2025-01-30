@@ -17,7 +17,7 @@ mod common;
 #[ignore]
 pub async fn concurrent_boarding() {
     init_tracing();
-    let nigiri = Arc::new(Nigiri::default());
+    let nigiri = Arc::new(Nigiri::new());
 
     let secp = Secp256k1::new();
 

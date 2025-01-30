@@ -16,10 +16,11 @@ mod common;
 pub async fn send_onchain_boarding_output() {
     init_tracing();
 
-    // To be able to spend a boarding output it needs to have been confirmed for at least 604_672
+    let nigiri = Arc::new(Nigiri::new());
+
+    // To be able to spend a boarding output it needs to have been confirmed for at least 1_024
     // seconds.
-    let outpoint_blocktime_offset = 604_672 + 10;
-    let nigiri = Arc::new(Nigiri::new(Some(outpoint_blocktime_offset)));
+    nigiri.set_outpoint_blocktime_offset(1_024);
 
     let secp = Secp256k1::new();
 
@@ -27,11 +28,9 @@ pub async fn send_onchain_boarding_output() {
 
     let alice_boarding_output = alice.get_boarding_output().unwrap();
 
-    let boarding_output = nigiri
+    nigiri
         .faucet_fund(alice_boarding_output.address(), Amount::ONE_BTC)
         .await;
-
-    tracing::debug!("Boarding output: {boarding_output:?}");
 
     let (tx, prevouts) = alice
         .create_send_on_chain_transaction(
@@ -44,6 +43,9 @@ pub async fn send_onchain_boarding_output() {
         )
         .await
         .unwrap();
+
+    assert_eq!(tx.input.len(), 1);
+    assert_eq!(prevouts.len(), 1);
 
     for (i, prevout) in prevouts.iter().enumerate() {
         let script_pubkey = prevout.script_pubkey.clone();
@@ -64,6 +66,6 @@ pub async fn send_onchain_boarding_output() {
             Some(&spent_outputs),
             i,
         )
-        .unwrap();
+        .expect("valid input");
     }
 }
