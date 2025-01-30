@@ -8,7 +8,6 @@ ark-bdk-wallet = { path = "../ark-bdk-wallet" }
 ark-core = { path = "../ark-core" }
 ark-rs = { path = "../ark-rs" }
 async-stream = "0.3"
-base64 = "0.22.1"
 bdk_esplora = "0.19.0"
 bdk_wallet = "1.0.0-beta.5"
 bech32 = "0.11"
