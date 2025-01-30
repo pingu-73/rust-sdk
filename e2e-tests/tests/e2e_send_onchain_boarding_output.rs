@@ -1,6 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-use ark_rs::wallet::BoardingWallet;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::key::Secp256k1;
 use bitcoin::Amount;
@@ -24,23 +23,9 @@ pub async fn send_onchain_boarding_output() {
 
     let secp = Secp256k1::new();
 
-    let (alice, alice_wallet) =
-        set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
+    let alice = set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
 
-    let alice_boarding_output = {
-        let alice_asp_info = alice.asp_info.clone();
-        let asp_pk = alice_asp_info.pk;
-        let (asp_pk, _) = asp_pk.inner.x_only_public_key();
-
-        alice_wallet
-            .new_boarding_output(
-                asp_pk,
-                alice_asp_info.round_lifetime,
-                &alice_asp_info.boarding_descriptor_template,
-                alice_asp_info.network,
-            )
-            .unwrap()
-    };
+    let alice_boarding_output = alice.get_boarding_output().unwrap();
 
     let boarding_output = nigiri
         .faucet_fund(alice_boarding_output.address(), Amount::ONE_BTC)

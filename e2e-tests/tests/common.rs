@@ -235,10 +235,7 @@ pub async fn set_up_client(
     name: String,
     nigiri: Arc<Nigiri>,
     secp: Secp256k1<All>,
-) -> (
-    Client<Nigiri, ark_bdk_wallet::Wallet<InMemoryDb>>,
-    Arc<ark_bdk_wallet::Wallet<InMemoryDb>>,
-) {
+) -> Client<Nigiri, ark_bdk_wallet::Wallet<InMemoryDb>> {
     let mut rng = thread_rng();
 
     let sk = SecretKey::new(&mut rng);
@@ -250,7 +247,7 @@ pub async fn set_up_client(
             .unwrap();
     let wallet = Arc::new(wallet);
 
-    let client = OfflineClient::new(
+    OfflineClient::new(
         name,
         kp,
         nigiri,
@@ -259,9 +256,7 @@ pub async fn set_up_client(
     )
     .connect()
     .await
-    .unwrap();
-
-    (client, wallet)
+    .unwrap()
 }
 
 pub fn init_tracing() {

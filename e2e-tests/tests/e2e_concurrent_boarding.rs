@@ -21,9 +21,9 @@ pub async fn concurrent_boarding() {
 
     let secp = Secp256k1::new();
 
-    let (alice, _) = set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
-    let (bob, _) = set_up_client("bob".to_string(), nigiri.clone(), secp.clone()).await;
-    let (claire, _) = set_up_client("claire".to_string(), nigiri.clone(), secp.clone()).await;
+    let alice = set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
+    let bob = set_up_client("bob".to_string(), nigiri.clone(), secp.clone()).await;
+    let claire = set_up_client("claire".to_string(), nigiri.clone(), secp.clone()).await;
 
     let alice_boarding_output = alice.get_boarding_output().unwrap();
     let bob_boarding_output = bob.get_boarding_output().unwrap();
