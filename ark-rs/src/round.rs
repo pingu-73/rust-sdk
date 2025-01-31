@@ -59,6 +59,11 @@ where
             "Attempting to board the ark"
         );
 
+        if boarding_inputs.is_empty() && vtxo_inputs.is_empty() {
+            tracing::debug!("No transactions to board");
+            return Ok(());
+        }
+
         let join_next_ark_round = || async {
             self.join_next_ark_round(
                 &mut rng.clone(),
