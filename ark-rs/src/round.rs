@@ -52,9 +52,10 @@ where
         let (boarding_inputs, vtxo_inputs, total_amount) =
             self.fetch_round_transaction_inputs().await?;
 
-        tracing::info!(
+        tracing::debug!(
             offchain_adress = %to_address.encode(),
             ?boarding_inputs,
+            ?vtxo_inputs,
             "Attempting to board the ark"
         );
 
