@@ -22,12 +22,14 @@ use bitcoin::Amount;
 use bitcoin::FeeRate;
 use bitcoin::Network;
 use bitcoin::Psbt;
-use bitcoin::Transaction;
 use bitcoin::XOnlyPublicKey;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::RwLock;
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod utils;
 
 pub struct Wallet<DB>
 where
@@ -36,7 +38,10 @@ where
     kp: Keypair,
     secp: Secp256k1<All>,
     inner: Arc<RwLock<BdkWallet>>,
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     client: esplora_client::AsyncClient,
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    client: esplora_client::AsyncClient<WebSleeper>,
     db: DB,
 }
 
@@ -59,7 +64,12 @@ where
             .network(network)
             .create_wallet_no_persist()?;
 
-        let client = esplora_client::Builder::new(esplora_url).build_async()?;
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        let client = esplora_client::Builder::new(esplora_url).build_async_with_sleeper()?;
+
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        let client =
+            esplora_client::Builder::new(esplora_url).build_async_with_sleeper::<WebSleeper>()?;
 
         Ok(Self {
             kp,
@@ -153,12 +163,6 @@ where
         Ok(psbt)
     }
 
-    async fn broadcast_tx(&self, tx: &Transaction) -> Result<(), Error> {
-        self.client.broadcast(tx).await.map_err(Error::wallet)?;
-
-        Ok(())
-    }
-
     fn sign(&self, psbt: &mut Psbt) -> Result<bool, Error> {
         let finalized = self
             .inner
@@ -216,5 +220,18 @@ where
             .sign_schnorr_no_aux_rand(msg, &key.keypair(&self.secp));
 
         Ok(sig)
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[derive(Clone)]
+struct WebSleeper;
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+impl esplora_client::Sleeper for WebSleeper {
+    type Sleep = utils::SendWrapper<gloo_timers::future::TimeoutFuture>;
+
+    fn sleep(dur: std::time::Duration) -> Self::Sleep {
+        utils::SendWrapper(gloo_timers::future::sleep(dur))
     }
 }

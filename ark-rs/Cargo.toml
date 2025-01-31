@@ -13,7 +13,6 @@ base64 = "0.22.1"
 bech32 = "0.11"
 bitcoin = { version = "0.32.4", features = ["rand"] }
 futures = "0.3.31"
-gloo-timers = { version = "0.3.0", features = ["futures"] }
 prost = "0.13.3"
 prost-types = "0.13.3"
 rand = "0.8"
@@ -23,11 +22,12 @@ zkp = { package = "secp256k1-zkp", git = "https://github.com/sanket1729/rust-sec
 
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 backon = { version = "1", features = ["tokio-sleep"] }
-tonic = { version = "0.12.3", features = ["tls-native-roots"] }
+tonic = { version = "0.12", features = ["tls-native-roots"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 backon = { version = "1", features = ["gloo-timers-sleep"] }
 getrandom = { version = "0.2", features = ["wasm-bindgen", "js"] }
+gloo-timers = { version = "0.3.0", features = ["futures"] }
 tonic = { version = "0.12", default-features = false, features = ["prost", "codegen"] }
 tonic-web-wasm-client = { version = "0.6", default-features = false }
 wasm-bindgen-futures = { version = "0.4" }

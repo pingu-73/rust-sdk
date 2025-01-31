@@ -8,7 +8,6 @@ use bitcoin::Amount;
 use bitcoin::FeeRate;
 use bitcoin::Network;
 use bitcoin::Psbt;
-use bitcoin::Transaction;
 use bitcoin::XOnlyPublicKey;
 
 pub trait BoardingWallet {
@@ -28,7 +27,7 @@ pub trait BoardingWallet {
 pub trait OnchainWallet {
     fn get_onchain_address(&self) -> Result<Address, Error>;
 
-    fn sync(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send;
+    fn sync(&self) -> impl std::future::Future<Output = Result<(), Error>>;
 
     fn balance(&self) -> Result<Balance, Error>;
 
@@ -38,11 +37,6 @@ pub trait OnchainWallet {
         amount: Amount,
         fee_rate: FeeRate,
     ) -> Result<Psbt, Error>;
-
-    fn broadcast_tx(
-        &self,
-        tx: &Transaction,
-    ) -> impl std::future::Future<Output = Result<(), Error>> + Send;
 
     fn sign(&self, psbt: &mut Psbt) -> Result<bool, Error>;
 }
