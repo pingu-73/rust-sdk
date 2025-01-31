@@ -1,11 +1,11 @@
 use anyhow::Result;
+use ark_client::error::Error;
+use ark_client::error::ErrorContext;
+use ark_client::wallet::Balance;
+use ark_client::wallet::BoardingWallet;
+use ark_client::wallet::OnchainWallet;
+use ark_client::wallet::Persistence;
 use ark_core::BoardingOutput;
-use ark_rs::error::Error;
-use ark_rs::error::ErrorContext;
-use ark_rs::wallet::Balance;
-use ark_rs::wallet::BoardingWallet;
-use ark_rs::wallet::OnchainWallet;
-use ark_rs::wallet::Persistence;
 use bdk_esplora::EsploraAsyncExt;
 use bdk_wallet::KeychainKind;
 use bdk_wallet::SignOptions;

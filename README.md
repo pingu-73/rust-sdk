@@ -1,4 +1,4 @@
-# Ark-rs - A rust client library for Ark
+# ark-rust-sdk - A Rust client library for Ark
 
 ## Local Development Setup
 

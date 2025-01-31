@@ -1,4 +1,4 @@
 [workspace]
-members = ["ark-rs", "ark-bdk-wallet", "e2e-tests", "ark-core"]
+members = ["ark-client", "ark-bdk-wallet", "e2e-tests", "ark-core"]
 
 resolver = "2"

@@ -1,12 +1,12 @@
 #![allow(clippy::unwrap_used)]
 
+use ark_client::error::Error;
+use ark_client::wallet::Persistence;
+use ark_client::Blockchain;
+use ark_client::Client;
+use ark_client::ExplorerUtxo;
+use ark_client::OfflineClient;
 use ark_core::BoardingOutput;
-use ark_rs::error::Error;
-use ark_rs::wallet::Persistence;
-use ark_rs::Blockchain;
-use ark_rs::Client;
-use ark_rs::ExplorerUtxo;
-use ark_rs::OfflineClient;
 use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::Secp256k1;

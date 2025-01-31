@@ -81,7 +81,7 @@ impl Error {
 
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut f = f.debug_tuple("ark_rs::asp_client::Error");
+        let mut f = f.debug_tuple("ark_client::asp_client::Error");
 
         f.field(&self.inner.kind);
 
