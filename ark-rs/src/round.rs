@@ -52,11 +52,17 @@ where
         let (boarding_inputs, vtxo_inputs, total_amount) =
             self.fetch_round_transaction_inputs().await?;
 
-        tracing::info!(
+        tracing::debug!(
             offchain_adress = %to_address.encode(),
             ?boarding_inputs,
+            ?vtxo_inputs,
             "Attempting to board the ark"
         );
+
+        if boarding_inputs.is_empty() && vtxo_inputs.is_empty() {
+            tracing::debug!("No transactions to board");
+            return Ok(());
+        }
 
         let join_next_ark_round = || async {
             self.join_next_ark_round(
