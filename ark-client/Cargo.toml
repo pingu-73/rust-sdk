@@ -25,6 +25,9 @@ ark-grpc = { path = "../ark-grpc" }
 backon = { version = "1", features = ["tokio-sleep"] }
 tonic = { version = "0.12", features = ["tls-native-roots"] }
 
+# TODO: We do not yet support WASM in `ark-client`. To support WASM in this high level crate, we
+# will need to make it possible to use either `ark-grpc` or `ark-rest`. The current default is
+# `ark-grpc`, but only `ark-rest` can support WASM.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 backon = { version = "1", features = ["gloo-timers-sleep"] }
 getrandom = { version = "0.2", features = ["wasm-bindgen", "js"] }

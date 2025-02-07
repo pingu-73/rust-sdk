@@ -13,8 +13,12 @@ fmt:
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings
 
+# TODO: We should build `ark-core`, `ark-rest`, `ark-bdk-wallet` and eventually even `ark-client`
+# for WASM.
+
 build-wasm:
-    cargo build -p ark-client --target wasm32-unknown-unknown
+    cargo build -p ark-core --target wasm32-unknown-unknown
+    cargo build -p ark-rest --target wasm32-unknown-unknown
 
 ## -----------------
 ## Code generation
