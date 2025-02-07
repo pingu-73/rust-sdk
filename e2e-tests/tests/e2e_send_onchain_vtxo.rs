@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
+use crate::common::InMemoryDb;
+use ark_bdk_wallet::Wallet;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::key::Secp256k1;
 use bitcoin::Amount;
@@ -42,20 +44,10 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
     assert_eq!(offchain_balance.total(), Amount::ZERO);
 
     alice.board(&mut rng).await.unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    let offchain_balance = alice.offchain_balance().await.unwrap();
-
-    assert_eq!(offchain_balance.confirmed(), fund_amount);
-    assert_eq!(offchain_balance.pending(), Amount::ZERO);
+    wait_until_balance(&alice, fund_amount, Amount::ZERO).await;
 
     alice.commit_vtxos_on_chain().await.unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await; // FIXME: Needed?
-
-    let offchain_balance = alice.offchain_balance().await.unwrap();
-
-    assert_eq!(offchain_balance.confirmed(), Amount::ZERO);
-    assert_eq!(offchain_balance.pending(), Amount::ZERO);
+    wait_until_balance(&alice, Amount::ZERO, Amount::ZERO).await;
 
     // Get one confirmation on the VTXO.
     nigiri.mine(1).await;
@@ -110,4 +102,26 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
         )
         .expect("valid input");
     }
+}
+
+async fn wait_until_balance(
+    client: &ark_rs::Client<Nigiri, Wallet<InMemoryDb>>,
+    confirmed_target: Amount,
+    pending_target: Amount,
+) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let offchain_balance = client.offchain_balance().await.unwrap();
+
+            if offchain_balance.confirmed() == confirmed_target
+                && offchain_balance.pending() == pending_target
+            {
+                return;
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
