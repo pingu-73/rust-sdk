@@ -28,7 +28,7 @@ impl Client {
         Self { configuration }
     }
 
-    pub async fn get_info(&self) -> Result<ark_core::asp::Info, Error> {
+    pub async fn get_info(&self) -> Result<ark_core::server::Info, Error> {
         let _info = ark_service_get_info(&self.configuration).await?;
 
         // TODO: Mapping from the `ark-rest` generated types to the `ark_core` types is too much of

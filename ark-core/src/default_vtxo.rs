@@ -18,12 +18,12 @@ use bitcoin::XOnlyPublicKey;
 use std::time::Duration;
 
 const DEFAULT_VTXO_DESCRIPTOR_TEMPLATE: &str =
-    "tr(UNSPENDABLE_KEY,{and(pk(USER),pk(ASP)),and(older(TIMEOUT),pk(USER))})";
+    "tr(UNSPENDABLE_KEY,{and(pk(USER),pk(SERVER)),and(older(TIMEOUT),pk(USER))})";
 
 /// All the information needed to _spend_ a default VTXO.
 #[derive(Debug, Clone)]
 pub struct DefaultVtxo {
-    asp: XOnlyPublicKey,
+    server: XOnlyPublicKey,
     owner: XOnlyPublicKey,
     spend_info: TaprootSpendInfo,
     ark_descriptor: String,
@@ -40,7 +40,7 @@ impl DefaultVtxo {
     /// Build a default VTXO.
     pub fn new<C>(
         secp: &Secp256k1<C>,
-        asp: XOnlyPublicKey,
+        server: XOnlyPublicKey,
         owner: XOnlyPublicKey,
         exit_delay: bitcoin::Sequence,
         network: Network,
@@ -51,7 +51,7 @@ impl DefaultVtxo {
         let unspendable_key: PublicKey = UNSPENDABLE_KEY.parse().expect("valid key");
         let (unspendable_key, _) = unspendable_key.inner.x_only_public_key();
 
-        let forfeit_script = multisig_script(asp, owner);
+        let forfeit_script = multisig_script(server, owner);
         let redeem_script = csv_sig_script(exit_delay, owner);
 
         let spend_info = TaprootBuilder::new()
@@ -69,14 +69,14 @@ impl DefaultVtxo {
         let ark_descriptor = DEFAULT_VTXO_DESCRIPTOR_TEMPLATE
             .replace("UNSPENDABLE_KEY", unspendable_key.to_string().as_str())
             .replace("USER", owner.to_string().as_str())
-            .replace("ASP", asp.to_string().as_str())
+            .replace("SERVER", server.to_string().as_str())
             .replace("TIMEOUT", exit_delay_seconds.to_string().as_str());
 
         let script_pubkey = tr_script_pubkey(&spend_info);
         let address = Address::from_script(&script_pubkey, network).expect("valid script");
 
         Self {
-            asp,
+            server,
             owner,
             spend_info,
             ark_descriptor,
@@ -113,7 +113,7 @@ impl DefaultVtxo {
 
     pub fn to_ark_address(&self) -> ArkAddress {
         let vtxo_tap_key = self.spend_info.output_key();
-        ArkAddress::new(self.network, self.asp, vtxo_tap_key)
+        ArkAddress::new(self.network, self.server, vtxo_tap_key)
     }
 
     /// The spend info for the forfeit branch of a default VTXO.
@@ -163,7 +163,7 @@ impl DefaultVtxo {
     }
 
     fn forfeit_script(&self) -> ScriptBuf {
-        multisig_script(self.asp, self.owner)
+        multisig_script(self.server, self.owner)
     }
 
     fn exit_script(&self) -> ScriptBuf {

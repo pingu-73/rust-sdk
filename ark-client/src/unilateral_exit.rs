@@ -31,7 +31,7 @@ where
     pub async fn commit_vtxos_on_chain(&self) -> Result<(), Error> {
         let spendable_vtxos = self.spendable_vtxos().await?;
 
-        let asp_client = &self.asp_client();
+        let network_client = &self.network_client();
         let vtxos = spendable_vtxos
             .into_iter()
             .flat_map(|(vtxo_outpoints, _)| {
@@ -62,10 +62,10 @@ where
         for vtxo in vtxos.iter() {
             let round_txid = vtxo.round_txid();
             if let Entry::Vacant(e) = rounds.entry(round_txid) {
-                let round = asp_client
+                let round = network_client
                     .get_round(round_txid.to_string())
                     .await
-                    .map_err(Error::asp)?
+                    .map_err(Error::ark_server)?
                     .ok_or_else(|| Error::ad_hoc(format!("could not find round {round_txid}")))?;
 
                 e.insert(round);
@@ -147,10 +147,10 @@ where
         to_address: Address,
         to_amount: Amount,
     ) -> Result<(Transaction, Vec<TxOut>), Error> {
-        if to_amount < self.asp_info.dust {
+        if to_amount < self.server_info.dust {
             return Err(Error::ad_hoc(format!(
                 "invalid amount {to_amount}, must be greater than dust: {}",
-                self.asp_info.dust,
+                self.server_info.dust,
             )));
         }
 

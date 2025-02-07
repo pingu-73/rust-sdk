@@ -13,7 +13,7 @@ use bitcoin::XOnlyPublicKey;
 pub trait BoardingWallet {
     fn new_boarding_output(
         &self,
-        asp_pubkey: XOnlyPublicKey,
+        server_pubkey: XOnlyPublicKey,
         exit_delay: bitcoin::Sequence,
         descriptor_template: &str,
         network: Network,

@@ -1,8 +1,8 @@
-use crate::asp::Tree;
 use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::internal_node::VtxoTreeInternalNodeScript;
+use crate::server::Tree;
 use crate::BoardingOutput;
 use crate::DefaultVtxo;
 use crate::Error;
@@ -223,7 +223,7 @@ impl PartialSigTree {
 #[allow(clippy::too_many_arguments)]
 pub fn sign_vtxo_tree(
     round_lifetime: bitcoin::Sequence,
-    asp_pk: XOnlyPublicKey,
+    server_pk: XOnlyPublicKey,
     // This is a cosigner key pair AFAIK.
     ephemeral_kp: &Keypair,
     vtxo_tree: &Tree,
@@ -232,7 +232,7 @@ pub fn sign_vtxo_tree(
     mut our_nonce_tree: NonceTree,
     aggregate_pub_nonce_tree: PubNonceTree,
 ) -> Result<PartialSigTree, Error> {
-    let internal_node_script = VtxoTreeInternalNodeScript::new(round_lifetime, asp_pk);
+    let internal_node_script = VtxoTreeInternalNodeScript::new(round_lifetime, server_pk);
 
     let secp = Secp256k1::new();
     let secp_zkp = zkp::Secp256k1::new();
@@ -376,9 +376,9 @@ pub fn create_and_sign_forfeit_txs(
         };
 
         let mut forfeit_psbts = Vec::new();
-        // It seems like we are signing multiple forfeit transactions per VTXO i.e. it seems
-        // like the ASP will be able to publish different versions of the same forfeit
-        // transaction. This might be useful because it gives the ASP more flexibility?
+        // It seems like we are signing multiple forfeit transactions per VTXO i.e. it seems like
+        // the Ark server will be able to publish different versions of the same forfeit
+        // transaction. This might be useful because it gives the Ark server more flexibility?
         for (connector_outpoint, connector_output) in connector_inputs.into_iter() {
             let mut forfeit_psbt = Psbt::from_unsigned_tx(Transaction {
                 version: transaction::Version::TWO,

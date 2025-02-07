@@ -9,15 +9,15 @@ use bitcoin::XOnlyPublicKey;
 
 /// The script of an _internal_ node of the VTXO tree. By internal node we mean a non-leaf node.
 ///
-/// This script allows the ASP to sweep the entire output after `round_lifetime_seconds` have passed
-/// from the time the output was included in a block.
+/// This script allows the Ark server to sweep the entire output after `round_lifetime_seconds` have
+/// passed from the time the output was included in a block.
 pub struct VtxoTreeInternalNodeScript {
     script: ScriptBuf,
 }
 
 impl VtxoTreeInternalNodeScript {
-    pub fn new(round_lifetime: bitcoin::Sequence, asp: XOnlyPublicKey) -> Self {
-        let script = csv_sig_script(round_lifetime, asp);
+    pub fn new(round_lifetime: bitcoin::Sequence, server: XOnlyPublicKey) -> Self {
+        let script = csv_sig_script(round_lifetime, server);
 
         Self { script }
     }

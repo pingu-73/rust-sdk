@@ -1,10 +1,10 @@
 use crate::wallet::BoardingWallet;
 use crate::wallet::OnchainWallet;
-use ark_core::asp;
-use ark_core::asp::ListVtxo;
-use ark_core::asp::Round;
-use ark_core::asp::VtxoOutPoint;
 use ark_core::default_vtxo::DefaultVtxo;
+use ark_core::server;
+use ark_core::server::ListVtxo;
+use ark_core::server::Round;
+use ark_core::server::VtxoOutPoint;
 use ark_core::ArkAddress;
 use ark_core::BoardingOutput;
 use bitcoin::key::Keypair;
@@ -32,7 +32,7 @@ pub use error::Error;
 
 pub struct OfflineClient<B, W> {
     // TODO: We could introduce a generic interface so that consumers can use either GRPC or REST.
-    asp_client: ark_grpc::Client,
+    network_client: ark_grpc::Client,
     pub name: String,
     pub kp: Keypair,
     blockchain: Arc<B>,
@@ -42,7 +42,7 @@ pub struct OfflineClient<B, W> {
 
 pub struct Client<B, W> {
     inner: OfflineClient<B, W>,
-    pub asp_info: asp::Info,
+    pub server_info: server::Info,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -96,14 +96,14 @@ where
         kp: Keypair,
         blockchain: Arc<B>,
         wallet: Arc<W>,
-        asp_url: String,
+        ark_server_url: String,
     ) -> Self {
         let secp = Secp256k1::new();
 
-        let asp_client = ark_grpc::Client::new(asp_url);
+        let network_client = ark_grpc::Client::new(ark_server_url);
 
         Self {
-            asp_client,
+            network_client,
             name,
             kp,
             blockchain,
@@ -113,18 +113,18 @@ where
     }
 
     pub async fn connect(mut self) -> Result<Client<B, W>, Error> {
-        self.asp_client.connect().await?;
-        let asp_info = self.asp_client.get_info().await?;
+        self.network_client.connect().await?;
+        let server_info = self.network_client.get_info().await?;
 
         tracing::debug!(
             name = self.name,
-            asp_url = ?self.asp_client,
+            ark_server_url = ?self.network_client,
             "Connected to Ark server"
         );
 
         Ok(Client {
             inner: self,
-            asp_info,
+            server_info,
         })
     }
 }
@@ -136,17 +136,17 @@ where
 {
     // At the moment we are always generating the same address.
     pub fn get_offchain_address(&self) -> (ArkAddress, DefaultVtxo) {
-        let asp_info = &self.asp_info;
+        let server_info = &self.server_info;
 
-        let (asp, _) = asp_info.pk.x_only_public_key();
+        let (server, _) = server_info.pk.x_only_public_key();
         let (owner, _) = self.inner.kp.public_key().x_only_public_key();
 
         let default_vtxo = DefaultVtxo::new(
             self.secp(),
-            asp,
+            server,
             owner,
-            asp_info.unilateral_exit_delay,
-            asp_info.network,
+            server_info.unilateral_exit_delay,
+            server_info.network,
         );
 
         let ark_address = default_vtxo.to_ark_address();
@@ -161,12 +161,12 @@ where
     }
 
     pub fn get_boarding_output(&self) -> Result<BoardingOutput, Error> {
-        let asp_info = &self.asp_info;
+        let server_info = &self.server_info;
         self.inner.wallet.new_boarding_output(
-            asp_info.pk.x_only_public_key().0,
-            asp_info.unilateral_exit_delay,
-            &asp_info.boarding_descriptor_template,
-            asp_info.network,
+            server_info.pk.x_only_public_key().0,
+            server_info.unilateral_exit_delay,
+            &server_info.boarding_descriptor_template,
+            server_info.network,
         )
     }
 
@@ -175,7 +175,7 @@ where
 
         let mut vtxos = vec![];
         for (address, _) in addresses.into_iter() {
-            let list = self.asp_client().list_vtxos(address).await?;
+            let list = self.network_client().list_vtxos(address).await?;
             vtxos.push(list);
         }
 
@@ -183,7 +183,7 @@ where
     }
 
     pub async fn get_round(&self, round_txid: String) -> Result<Option<Round>, Error> {
-        let round = self.asp_client().get_round(round_txid).await?;
+        let round = self.network_client().get_round(round_txid).await?;
 
         Ok(round)
     }
@@ -197,7 +197,7 @@ where
 
         let mut spendable = vec![];
         for (address, vtxo) in addresses.into_iter() {
-            let vtxos = self.asp_client().list_vtxos(address).await?;
+            let vtxos = self.network_client().list_vtxos(address).await?;
             let explorer_utxos = self.blockchain().find_outpoints(vtxo.address()).await?;
 
             let mut vtxo_outpoints = Vec::new();
@@ -255,8 +255,8 @@ where
 
     // TODO: GetTransactionHistory.
 
-    fn asp_client(&self) -> ark_grpc::Client {
-        self.inner.asp_client.clone()
+    fn network_client(&self) -> ark_grpc::Client {
+        self.inner.network_client.clone()
     }
 
     fn kp(&self) -> &Keypair {

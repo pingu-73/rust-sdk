@@ -7,16 +7,16 @@ use crate::Blockchain;
 use crate::Client;
 use crate::Error;
 use crate::ExplorerUtxo;
-use ark_core::asp::RoundInput;
-use ark_core::asp::RoundOutput;
-use ark_core::asp::RoundStreamEvent;
-use ark_core::asp::Tree;
 use ark_core::round;
 use ark_core::round::create_and_sign_forfeit_txs;
 use ark_core::round::generate_nonce_tree;
 use ark_core::round::sign_round_psbt;
 use ark_core::round::sign_vtxo_tree;
 use ark_core::round::NonceTree;
+use ark_core::server::RoundInput;
+use ark_core::server::RoundOutput;
+use ark_core::server::RoundStreamEvent;
+use ark_core::server::Tree;
 use ark_core::ArkAddress;
 use backon::ExponentialBuilder;
 use backon::Retryable;
@@ -233,7 +233,7 @@ where
             return Err(Error::ad_hoc("cannot join round without inputs"));
         }
 
-        let asp_info = &self.asp_info;
+        let server_info = &self.server_info;
 
         // Generate an ephemeral key.
         let ephemeral_kp = Keypair::new(self.secp(), rng);
@@ -253,7 +253,7 @@ where
         };
 
         let payment_id = self
-            .asp_client()
+            .network_client()
             .register_inputs_for_next_round(ephemeral_kp.public_key(), inputs)
             .await
             .map_err(Error::from)
@@ -279,22 +279,22 @@ where
             }
         }
 
-        self.asp_client()
+        self.network_client()
             .register_outputs_for_next_round(payment_id.clone(), outputs)
             .await?;
 
-        let asp_client = self.asp_client();
+        let network_client = self.network_client();
 
-        // The protocol expects us to ping the ASP every 5 seconds to let the server know that we
-        // are still interested in joining the round.
+        // The protocol expects us to ping the Ark server every 5 seconds to let the server know
+        // that we are still interested in joining the round.
         //
         // We generate a `RemoteHandle` so that the ping task is cancelled when the parent function
         // ends.
         let (ping_task, _ping_handle) = {
-            let asp_client = asp_client.clone();
+            let network_client = network_client.clone();
             async move {
                 loop {
-                    if let Err(e) = asp_client.ping(payment_id.clone()).await {
+                    if let Err(e) = network_client.ping(payment_id.clone()).await {
                         tracing::warn!("Error via ping: {e:?}");
                     }
 
@@ -306,11 +306,11 @@ where
 
         spawn(ping_task);
 
-        let mut stream = asp_client.get_event_stream().await?;
+        let mut stream = network_client.get_event_stream().await?;
 
         let mut step = RoundStep::Start;
 
-        let (asp_pk, _) = asp_info.pk.x_only_public_key();
+        let (ark_server_pk, _) = server_info.pk.x_only_public_key();
 
         let mut round_id: Option<String> = None;
         let mut unsigned_round_tx: Option<Psbt> = None;
@@ -340,7 +340,7 @@ where
                         )
                         .map_err(Error::from)?;
 
-                        asp_client
+                        network_client
                             .submit_tree_nonces(
                                 e.id,
                                 ephemeral_kp.public_key(),
@@ -377,21 +377,21 @@ where
 
                         let unsigned_round_tx = unsigned_round_tx
                             .as_ref()
-                            .ok_or(Error::asp("missing round TX during round protocol"))?;
+                            .ok_or(Error::ark_server("missing round TX during round protocol"))?;
 
                         let vtxo_tree = vtxo_tree
                             .as_ref()
-                            .ok_or(Error::asp("missing vtxo tree during round protocol"))?;
-                        let cosigner_pks = cosigner_pks
-                            .clone()
-                            .ok_or(Error::asp("missing cosigner PKs during round protocol"))?;
-                        let our_nonce_tree = our_nonce_tree
-                            .take()
-                            .ok_or(Error::asp("missing nonce tree during round protocol"))?;
+                            .ok_or(Error::ark_server("missing vtxo tree during round protocol"))?;
+                        let cosigner_pks = cosigner_pks.clone().ok_or(Error::ark_server(
+                            "missing cosigner PKs during round protocol",
+                        ))?;
+                        let our_nonce_tree = our_nonce_tree.take().ok_or(Error::ark_server(
+                            "missing nonce tree during round protocol",
+                        ))?;
 
                         let partial_sig_tree = sign_vtxo_tree(
-                            asp_info.round_lifetime,
-                            asp_pk,
+                            server_info.round_lifetime,
+                            ark_server_pk,
                             &ephemeral_kp,
                             vtxo_tree,
                             unsigned_round_tx,
@@ -401,7 +401,7 @@ where
                         )
                         .map_err(Error::from)?;
 
-                        asp_client
+                        network_client
                             .submit_tree_signatures(
                                 e.id,
                                 ephemeral_kp.public_key(),
@@ -422,8 +422,8 @@ where
                             vtxo_inputs.as_slice(),
                             e.connectors,
                             e.min_relay_fee_rate,
-                            &asp_info.forfeit_address,
-                            asp_info.dust,
+                            &server_info.forfeit_address,
+                            server_info.dust,
                         )
                         .map_err(Error::from)?;
 
@@ -444,7 +444,7 @@ where
                         sign_round_psbt(sign_for_pk_fn, &mut round_psbt, &onchain_inputs)
                             .map_err(Error::from)?;
 
-                        asp_client
+                        network_client
                             .submit_signed_forfeit_txs(signed_forfeit_psbts, round_psbt)
                             .await?;
 
@@ -463,7 +463,7 @@ where
                     }
                     RoundStreamEvent::RoundFailed(e) => {
                         if Some(&e.id) == round_id.as_ref() {
-                            return Err(Error::asp(format!(
+                            return Err(Error::ark_server(format!(
                                 "failed registering in round {}: {}",
                                 e.id, e.reason
                             )));
@@ -475,10 +475,10 @@ where
                     }
                 },
                 Some(Err(e)) => {
-                    return Err(Error::asp(e));
+                    return Err(Error::ark_server(e));
                 }
                 None => {
-                    return Err(Error::asp("dropped round event stream"));
+                    return Err(Error::ark_server("dropped round event stream"));
                 }
             }
         }

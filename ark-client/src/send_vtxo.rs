@@ -33,10 +33,14 @@ where
             })
             .collect::<Vec<_>>();
 
-        let selected_coins =
-            select_vtxos(spendable_vtxo_outpoints, amount, self.asp_info.dust, true)
-                .map_err(Error::from)
-                .context("failed to select coins")?;
+        let selected_coins = select_vtxos(
+            spendable_vtxo_outpoints,
+            amount,
+            self.server_info.dust,
+            true,
+        )
+        .map_err(Error::from)
+        .context("failed to select coins")?;
 
         let vtxo_inputs = selected_coins
             .into_iter()
@@ -71,10 +75,10 @@ where
         )
         .map_err(Error::from)?;
 
-        self.asp_client()
+        self.network_client()
             .submit_redeem_transaction(signed_redeem_psbt.clone())
             .await
-            .map_err(Error::asp)
+            .map_err(Error::ark_server)
             .context("failed to complete payment request")?;
 
         Ok(signed_redeem_psbt)

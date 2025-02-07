@@ -18,7 +18,7 @@ use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoardingOutput {
-    asp: XOnlyPublicKey,
+    server: XOnlyPublicKey,
     owner: XOnlyPublicKey,
     spend_info: TaprootSpendInfo,
     address: Address,
@@ -29,7 +29,7 @@ pub struct BoardingOutput {
 impl BoardingOutput {
     pub fn new<C>(
         secp: &Secp256k1<C>,
-        asp: XOnlyPublicKey,
+        server: XOnlyPublicKey,
         owner: XOnlyPublicKey,
         boarding_descriptor_template: &str,
         exit_delay: bitcoin::Sequence,
@@ -41,7 +41,7 @@ impl BoardingOutput {
         let unspendable_key: PublicKey = UNSPENDABLE_KEY.parse().expect("valid key");
         let (unspendable_key, _) = unspendable_key.inner.x_only_public_key();
 
-        let multisig_script = multisig_script(asp, owner);
+        let multisig_script = multisig_script(server, owner);
         let exit_script = csv_sig_script(exit_delay, owner);
 
         let spend_info = TaprootBuilder::new()
@@ -59,7 +59,7 @@ impl BoardingOutput {
         let address = Address::from_script(&script_pubkey, network).expect("valid script");
 
         Self {
-            asp,
+            server,
             owner,
             spend_info,
             address,
@@ -148,7 +148,7 @@ impl BoardingOutput {
     }
 
     fn forfeit_script(&self) -> ScriptBuf {
-        multisig_script(self.asp, self.owner)
+        multisig_script(self.server, self.owner)
     }
 
     fn exit_script(&self) -> ScriptBuf {

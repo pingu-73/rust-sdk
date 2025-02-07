@@ -181,7 +181,7 @@ where
 {
     fn new_boarding_output(
         &self,
-        asp_pubkey: XOnlyPublicKey,
+        server_pk: XOnlyPublicKey,
         exit_delay: bitcoin::Sequence,
         descriptor_template: &str,
         network: Network,
@@ -191,7 +191,7 @@ where
 
         let address = BoardingOutput::new(
             &self.secp,
-            asp_pubkey,
+            server_pk,
             owner_pk,
             descriptor_template,
             exit_delay,

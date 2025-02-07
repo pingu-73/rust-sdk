@@ -1,6 +1,6 @@
 use crate::generated;
 use crate::Error;
-use ark_core::asp;
+use ark_core::server;
 use base64::Engine;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::Address;
@@ -8,7 +8,7 @@ use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
 
-impl TryFrom<generated::ark::v1::GetInfoResponse> for asp::Info {
+impl TryFrom<generated::ark::v1::GetInfoResponse> for server::Info {
     type Error = Error;
 
     fn try_from(value: generated::ark::v1::GetInfoResponse) -> Result<Self, Self::Error> {
@@ -43,7 +43,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for asp::Info {
     }
 }
 
-impl TryFrom<&generated::ark::v1::Vtxo> for asp::VtxoOutPoint {
+impl TryFrom<&generated::ark::v1::Vtxo> for server::VtxoOutPoint {
     type Error = Error;
 
     fn try_from(value: &generated::ark::v1::Vtxo) -> Result<Self, Self::Error> {

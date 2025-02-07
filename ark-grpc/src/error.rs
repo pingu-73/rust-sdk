@@ -65,8 +65,8 @@ impl Error {
 
     fn description(&self) -> &str {
         match &self.inner.kind {
-            Kind::Connect => "failed to connect to ASP",
-            Kind::NotConnected => "no connection to ASP",
+            Kind::Connect => "failed to connect to Ark server",
+            Kind::NotConnected => "no connection to Ark server",
             Kind::Request => "request failed",
             Kind::Conversion => "failed to convert between types",
             Kind::Ping => "error via ping",
@@ -78,7 +78,7 @@ impl Error {
 
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut f = f.debug_tuple("ark_client::asp_client::Error");
+        let mut f = f.debug_tuple("ark_grpc::Error");
 
         f.field(&self.inner.kind);
 

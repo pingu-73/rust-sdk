@@ -18,8 +18,8 @@ struct ErrorImpl {
 enum Kind {
     /// Ad-hoc error,
     AdHoc(AdHocError),
-    /// An error related to interactions with the ASP.
-    Asp(AspError),
+    /// An error related to interactions with the Ark server.
+    ArkServer(ArkServerError),
     /// An error from [`ark_core`].
     Core(CoreError),
     /// An error related to coin selection of VTXOs and boarding outputs.
@@ -34,7 +34,7 @@ struct AdHocError {
 }
 
 #[derive(Debug)]
-struct AspError {
+struct ArkServerError {
     source: Source,
 }
 
@@ -66,8 +66,8 @@ impl Error {
         }))
     }
 
-    pub(crate) fn asp(source: impl Into<Source>) -> Self {
-        Error::new(Kind::Asp(AspError {
+    pub(crate) fn ark_server(source: impl Into<Source>) -> Self {
+        Error::new(Kind::ArkServer(ArkServerError {
             source: source.into(),
         }))
     }
@@ -104,7 +104,7 @@ impl fmt::Display for Kind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Kind::AdHoc(ref err) => err.fmt(f),
-            Kind::Asp(ref err) => err.fmt(f),
+            Kind::ArkServer(ref err) => err.fmt(f),
             Kind::Core(ref err) => err.fmt(f),
             Kind::CoinSelect(ref err) => err.fmt(f),
             Kind::Wallet(ref err) => err.fmt(f),
@@ -118,7 +118,7 @@ impl fmt::Display for AdHocError {
     }
 }
 
-impl fmt::Display for AspError {
+impl fmt::Display for ArkServerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.source.fmt(f)
     }
@@ -236,6 +236,6 @@ impl<T> ErrorContext for Result<T, Error> {
 
 impl From<ark_grpc::Error> for Error {
     fn from(value: ark_grpc::Error) -> Self {
-        Self::asp(value)
+        Self::ark_server(value)
     }
 }
