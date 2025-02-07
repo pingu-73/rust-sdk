@@ -1,4 +1,4 @@
-use crate::asp::Error;
+use crate::Error;
 use bitcoin::hex::FromHex;
 use std::io;
 use std::io::Cursor;
@@ -97,7 +97,7 @@ where
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use super::*;
     use bitcoin::hex::DisplayHex;
     use bitcoin::hex::FromHex;

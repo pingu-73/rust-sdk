@@ -14,7 +14,6 @@ struct ErrorImpl {
 
 #[derive(Debug)]
 enum Kind {
-    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     Connect,
     NotConnected,
     Request,
@@ -36,7 +35,6 @@ impl Error {
         self
     }
 
-    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     pub(crate) fn connect(source: impl Into<Source>) -> Self {
         Error::new(Kind::Connect).with(source)
     }
@@ -67,7 +65,6 @@ impl Error {
 
     fn description(&self) -> &str {
         match &self.inner.kind {
-            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
             Kind::Connect => "failed to connect to ASP",
             Kind::NotConnected => "no connection to ASP",
             Kind::Request => "request failed",
@@ -105,11 +102,5 @@ impl StdError for Error {
             .source
             .as_ref()
             .map(|source| &**source as &(dyn StdError + 'static))
-    }
-}
-
-impl From<Error> for crate::Error {
-    fn from(value: Error) -> Self {
-        Self::asp(value)
     }
 }

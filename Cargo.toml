@@ -1,4 +1,7 @@
 [workspace]
-members = ["ark-client", "ark-bdk-wallet", "e2e-tests", "ark-core"]
+members = ["ark-client", "ark-core", "ark-grpc", "ark-rest", "ark-bdk-wallet", "e2e-tests", "ark-sample"]
 
 resolver = "2"
+
+[patch.crates-io]
+secp256k1-zkp = { git = "https://github.com/sanket1729/rust-secp256k1-zkp", rev = "60e631c24588a0c9e271badd61959294848c665d" }

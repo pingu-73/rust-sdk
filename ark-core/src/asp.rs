@@ -1,5 +1,9 @@
+//! Messages exchanged between the client and the Ark server.
+
 use crate::ark_address::ArkAddress;
+use bitcoin::secp256k1::PublicKey;
 use bitcoin::Amount;
+use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::ScriptBuf;
@@ -117,4 +121,85 @@ pub struct VtxoOutPoint {
     pub amount: Amount,
     pub pubkey: String,
     pub created_at: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct Info {
+    pub pk: PublicKey,
+    pub round_lifetime: bitcoin::Sequence,
+    pub unilateral_exit_delay: bitcoin::Sequence,
+    pub round_interval: i64,
+    pub network: Network,
+    pub dust: Amount,
+    pub boarding_descriptor_template: String,
+    pub vtxo_descriptor_templates: Vec<String>,
+    pub forfeit_address: bitcoin::Address,
+}
+
+#[derive(Clone, Debug)]
+pub struct ListVtxo {
+    pub spent: Vec<VtxoOutPoint>,
+    pub spendable: Vec<VtxoOutPoint>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoundFinalizationEvent {
+    pub id: String,
+    pub round_tx: Psbt,
+    pub vtxo_tree: Option<Tree>,
+    pub connectors: Vec<Psbt>,
+    pub min_relay_fee_rate: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoundFinalizedEvent {
+    pub id: String,
+    pub round_txid: Txid,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoundFailedEvent {
+    pub id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoundSigningEvent {
+    pub id: String,
+    pub cosigners_pubkeys: Vec<PublicKey>,
+    pub unsigned_vtxo_tree: Option<Tree>,
+    pub unsigned_round_tx: Psbt,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoundSigningNoncesGeneratedEvent {
+    pub id: String,
+    pub tree_nonces: Vec<Vec<zkp::MusigPubNonce>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RoundStreamEvent {
+    RoundFinalization(RoundFinalizationEvent),
+    RoundFinalized(RoundFinalizedEvent),
+    RoundFailed(RoundFailedEvent),
+    RoundSigning(RoundSigningEvent),
+    RoundSigningNoncesGenerated(RoundSigningNoncesGeneratedEvent),
+}
+
+pub enum TransactionEvent {
+    Round(RoundTransaction),
+    Redeem(RedeemTransaction),
+}
+
+pub struct RedeemTransaction {
+    pub txid: Txid,
+    pub spent_vtxos: Vec<OutPoint>,
+    pub spendable_vtxos: Vec<VtxoOutPoint>,
+}
+
+pub struct RoundTransaction {
+    pub txid: Txid,
+    pub spent_vtxos: Vec<OutPoint>,
+    pub spendable_vtxos: Vec<VtxoOutPoint>,
+    pub claimed_boarding_utxos: Vec<OutPoint>,
 }

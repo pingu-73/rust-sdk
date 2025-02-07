@@ -1,7 +1,4 @@
-use crate::asp::tree;
-use crate::asp::types::Info;
-use crate::asp::types::ListVtxo;
-use crate::asp::Error;
+use crate::generated;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
 use crate::generated::ark::v1::input::TaprootTree;
 use crate::generated::ark::v1::GetEventStreamRequest;
@@ -20,10 +17,23 @@ use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::generated::ark::v1::Tapscripts;
+use crate::tree;
+use crate::Error;
+use ark_core::asp::Info;
+use ark_core::asp::ListVtxo;
 use ark_core::asp::Node;
+use ark_core::asp::RedeemTransaction;
 use ark_core::asp::Round;
+use ark_core::asp::RoundFailedEvent;
+use ark_core::asp::RoundFinalizationEvent;
+use ark_core::asp::RoundFinalizedEvent;
 use ark_core::asp::RoundInput;
 use ark_core::asp::RoundOutput;
+use ark_core::asp::RoundSigningEvent;
+use ark_core::asp::RoundSigningNoncesGeneratedEvent;
+use ark_core::asp::RoundStreamEvent;
+use ark_core::asp::RoundTransaction;
+use ark_core::asp::TransactionEvent;
 use ark_core::asp::Tree;
 use ark_core::asp::TreeLevel;
 use ark_core::asp::VtxoOutPoint;
@@ -41,74 +51,9 @@ use futures::TryStreamExt;
 use std::str::FromStr;
 
 #[derive(Debug, Clone)]
-pub struct RoundFinalizationEvent {
-    pub id: String,
-    pub round_tx: Psbt,
-    pub vtxo_tree: Option<Tree>,
-    pub connectors: Vec<Psbt>,
-    pub min_relay_fee_rate: i64,
-}
-
-#[derive(Debug, Clone)]
-pub struct RoundFinalizedEvent {
-    pub id: String,
-    pub round_txid: Txid,
-}
-
-#[derive(Debug, Clone)]
-pub struct RoundFailedEvent {
-    pub id: String,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct RoundSigningEvent {
-    pub id: String,
-    pub cosigners_pubkeys: Vec<PublicKey>,
-    pub unsigned_vtxo_tree: Option<Tree>,
-    pub unsigned_round_tx: Psbt,
-}
-
-#[derive(Debug, Clone)]
-pub struct RoundSigningNoncesGeneratedEvent {
-    pub id: String,
-    pub tree_nonces: Vec<Vec<zkp::MusigPubNonce>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum RoundStreamEvent {
-    RoundFinalization(RoundFinalizationEvent),
-    RoundFinalized(RoundFinalizedEvent),
-    RoundFailed(RoundFailedEvent),
-    RoundSigning(RoundSigningEvent),
-    RoundSigningNoncesGenerated(RoundSigningNoncesGeneratedEvent),
-}
-
-pub enum TransactionEvent {
-    Round(RoundTransaction),
-    Redeem(RedeemTransaction),
-}
-
-pub struct RedeemTransaction {
-    pub txid: Txid,
-    pub spent_vtxos: Vec<OutPoint>,
-    pub spendable_vtxos: Vec<VtxoOutPoint>,
-}
-
-pub struct RoundTransaction {
-    pub txid: Txid,
-    pub spent_vtxos: Vec<OutPoint>,
-    pub spendable_vtxos: Vec<VtxoOutPoint>,
-    pub claimed_boarding_utxos: Vec<OutPoint>,
-}
-
-#[derive(Debug, Clone)]
 pub struct Client {
     url: String,
-    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     inner: Option<ArkServiceClient<tonic::transport::Channel>>,
-    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-    inner: Option<ArkServiceClient<tonic_web_wasm_client::Client>>,
 }
 
 impl Client {
@@ -117,13 +62,6 @@ impl Client {
     }
 
     pub async fn connect(&mut self) -> Result<(), Error> {
-        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-        let client = {
-            let web_client = tonic_web_wasm_client::Client::new(self.url.clone());
-            ArkServiceClient::new(web_client)
-        };
-
-        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         let client = ArkServiceClient::connect(self.url.clone())
             .await
             .map_err(Error::connect)?;
@@ -135,10 +73,14 @@ impl Client {
     pub async fn get_info(&mut self) -> Result<Info, Error> {
         let mut client = self.inner_client()?;
 
+        log::info!("1");
+
         let response = client
             .get_info(GetInfoRequest {})
             .await
             .map_err(Error::request)?;
+
+        log::info!("2");
 
         response.into_inner().try_into()
     }
@@ -355,7 +297,7 @@ impl Client {
                 match stream.try_next().await {
                     Ok(Some(event)) => match event.event {
                         None => {
-                            tracing::debug!("Got empty message");
+                            log::debug!("Got empty message");
                         }
                         Some(event) => {
                             yield Ok(RoundStreamEvent::try_from(event)?);
@@ -391,7 +333,7 @@ impl Client {
                 match stream.try_next().await {
                     Ok(Some(event)) => match event.tx {
                         None => {
-                            tracing::debug!("Got empty message");
+                            log::debug!("Got empty message");
                         }
                         Some(event) => {
                             yield Ok(TransactionEvent::try_from(event)?);
@@ -424,23 +366,16 @@ impl Client {
         Ok(round)
     }
 
-    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     fn inner_client(&self) -> Result<ArkServiceClient<tonic::transport::Channel>, Error> {
-        // Cloning an `ArkServiceClient<Channel>` is cheap.
-        self.inner.clone().ok_or(Error::not_connected())
-    }
-
-    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-    fn inner_client(&self) -> Result<ArkServiceClient<tonic_web_wasm_client::Client>, Error> {
         // Cloning an `ArkServiceClient<Channel>` is cheap.
         self.inner.clone().ok_or(Error::not_connected())
     }
 }
 
-impl TryFrom<crate::generated::ark::v1::Tree> for Tree {
+impl TryFrom<generated::ark::v1::Tree> for Tree {
     type Error = Error;
 
-    fn try_from(value: crate::generated::ark::v1::Tree) -> Result<Self, Self::Error> {
+    fn try_from(value: generated::ark::v1::Tree) -> Result<Self, Self::Error> {
         let levels = value
             .levels
             .into_iter()
@@ -451,10 +386,10 @@ impl TryFrom<crate::generated::ark::v1::Tree> for Tree {
     }
 }
 
-impl TryFrom<crate::generated::ark::v1::TreeLevel> for TreeLevel {
+impl TryFrom<generated::ark::v1::TreeLevel> for TreeLevel {
     type Error = Error;
 
-    fn try_from(value: crate::generated::ark::v1::TreeLevel) -> Result<Self, Self::Error> {
+    fn try_from(value: generated::ark::v1::TreeLevel) -> Result<Self, Self::Error> {
         let nodes = value
             .nodes
             .into_iter()
@@ -465,10 +400,10 @@ impl TryFrom<crate::generated::ark::v1::TreeLevel> for TreeLevel {
     }
 }
 
-impl TryFrom<crate::generated::ark::v1::Node> for Node {
+impl TryFrom<generated::ark::v1::Node> for Node {
     type Error = Error;
 
-    fn try_from(value: crate::generated::ark::v1::Node) -> Result<Self, Self::Error> {
+    fn try_from(value: generated::ark::v1::Node) -> Result<Self, Self::Error> {
         let txid: Txid = value.txid.parse().map_err(Error::conversion)?;
 
         let tx = base64::engine::GeneralPurpose::new(
@@ -490,12 +425,10 @@ impl TryFrom<crate::generated::ark::v1::Node> for Node {
     }
 }
 
-impl TryFrom<crate::generated::ark::v1::RoundFinalizationEvent> for RoundFinalizationEvent {
+impl TryFrom<generated::ark::v1::RoundFinalizationEvent> for RoundFinalizationEvent {
     type Error = Error;
 
-    fn try_from(
-        value: crate::generated::ark::v1::RoundFinalizationEvent,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(value: generated::ark::v1::RoundFinalizationEvent) -> Result<Self, Self::Error> {
         let base64 = &base64::engine::GeneralPurpose::new(
             &base64::alphabet::STANDARD,
             base64::engine::GeneralPurposeConfig::new(),
@@ -527,12 +460,10 @@ impl TryFrom<crate::generated::ark::v1::RoundFinalizationEvent> for RoundFinaliz
     }
 }
 
-impl TryFrom<crate::generated::ark::v1::RoundFinalizedEvent> for RoundFinalizedEvent {
+impl TryFrom<generated::ark::v1::RoundFinalizedEvent> for RoundFinalizedEvent {
     type Error = Error;
 
-    fn try_from(
-        value: crate::generated::ark::v1::RoundFinalizedEvent,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(value: generated::ark::v1::RoundFinalizedEvent) -> Result<Self, Self::Error> {
         let round_txid = value.round_txid.parse().map_err(Error::conversion)?;
 
         Ok(RoundFinalizedEvent {
@@ -542,8 +473,8 @@ impl TryFrom<crate::generated::ark::v1::RoundFinalizedEvent> for RoundFinalizedE
     }
 }
 
-impl From<crate::generated::ark::v1::RoundFailed> for RoundFailedEvent {
-    fn from(value: crate::generated::ark::v1::RoundFailed) -> Self {
+impl From<generated::ark::v1::RoundFailed> for RoundFailedEvent {
+    fn from(value: generated::ark::v1::RoundFailed) -> Self {
         RoundFailedEvent {
             id: value.id,
             reason: value.reason,
@@ -551,10 +482,10 @@ impl From<crate::generated::ark::v1::RoundFailed> for RoundFailedEvent {
     }
 }
 
-impl TryFrom<crate::generated::ark::v1::RoundSigningEvent> for RoundSigningEvent {
+impl TryFrom<generated::ark::v1::RoundSigningEvent> for RoundSigningEvent {
     type Error = Error;
 
-    fn try_from(value: crate::generated::ark::v1::RoundSigningEvent) -> Result<Self, Self::Error> {
+    fn try_from(value: generated::ark::v1::RoundSigningEvent) -> Result<Self, Self::Error> {
         let unsigned_round_tx = base64::engine::GeneralPurpose::new(
             &base64::alphabet::STANDARD,
             base64::engine::GeneralPurposeConfig::new(),
@@ -582,15 +513,15 @@ impl TryFrom<crate::generated::ark::v1::RoundSigningEvent> for RoundSigningEvent
     }
 }
 
-impl TryFrom<crate::generated::ark::v1::RoundSigningNoncesGeneratedEvent>
+impl TryFrom<generated::ark::v1::RoundSigningNoncesGeneratedEvent>
     for RoundSigningNoncesGeneratedEvent
 {
     type Error = Error;
 
     fn try_from(
-        value: crate::generated::ark::v1::RoundSigningNoncesGeneratedEvent,
+        value: generated::ark::v1::RoundSigningNoncesGeneratedEvent,
     ) -> Result<Self, Self::Error> {
-        let tree_nonces = crate::asp::decode_tree(value.tree_nonces)?;
+        let tree_nonces = crate::decode_tree(value.tree_nonces)?;
 
         Ok(RoundSigningNoncesGeneratedEvent {
             id: value.id,
@@ -599,36 +530,36 @@ impl TryFrom<crate::generated::ark::v1::RoundSigningNoncesGeneratedEvent>
     }
 }
 
-impl TryFrom<crate::generated::ark::v1::get_event_stream_response::Event> for RoundStreamEvent {
+impl TryFrom<generated::ark::v1::get_event_stream_response::Event> for RoundStreamEvent {
     type Error = Error;
 
     fn try_from(
-        value: crate::generated::ark::v1::get_event_stream_response::Event,
+        value: generated::ark::v1::get_event_stream_response::Event,
     ) -> Result<Self, Self::Error> {
         Ok(match value {
-            crate::generated::ark::v1::get_event_stream_response::Event::RoundFinalization(e) => {
+            generated::ark::v1::get_event_stream_response::Event::RoundFinalization(e) => {
                 RoundStreamEvent::RoundFinalization(e.try_into()?)
             }
-            crate::generated::ark::v1::get_event_stream_response::Event::RoundFinalized(e) => {
+            generated::ark::v1::get_event_stream_response::Event::RoundFinalized(e) => {
                 RoundStreamEvent::RoundFinalized(e.try_into()?)
             }
-            crate::generated::ark::v1::get_event_stream_response::Event::RoundFailed(e) => {
+            generated::ark::v1::get_event_stream_response::Event::RoundFailed(e) => {
                 RoundStreamEvent::RoundFailed(e.into())
             }
-            crate::generated::ark::v1::get_event_stream_response::Event::RoundSigning(e) => {
+            generated::ark::v1::get_event_stream_response::Event::RoundSigning(e) => {
                 RoundStreamEvent::RoundSigning(e.try_into()?)
             }
-            crate::generated::ark::v1::get_event_stream_response::Event::RoundSigningNoncesGenerated(e) => {
-                RoundStreamEvent::RoundSigningNoncesGenerated(e.try_into()?)
-            }
+            generated::ark::v1::get_event_stream_response::Event::RoundSigningNoncesGenerated(
+                e,
+            ) => RoundStreamEvent::RoundSigningNoncesGenerated(e.try_into()?),
         })
     }
 }
 
-impl TryFrom<crate::generated::ark::v1::Round> for Round {
+impl TryFrom<generated::ark::v1::Round> for Round {
     type Error = Error;
 
-    fn try_from(value: crate::generated::ark::v1::Round) -> Result<Self, Self::Error> {
+    fn try_from(value: generated::ark::v1::Round) -> Result<Self, Self::Error> {
         let base64 = base64::engine::GeneralPurpose::new(
             &base64::alphabet::STANDARD,
             base64::engine::GeneralPurposeConfig::new(),
@@ -674,27 +605,27 @@ impl TryFrom<crate::generated::ark::v1::Round> for Round {
     }
 }
 
-impl TryFrom<crate::generated::ark::v1::get_transactions_stream_response::Tx> for TransactionEvent {
+impl TryFrom<generated::ark::v1::get_transactions_stream_response::Tx> for TransactionEvent {
     type Error = Error;
 
     fn try_from(
-        value: crate::generated::ark::v1::get_transactions_stream_response::Tx,
+        value: generated::ark::v1::get_transactions_stream_response::Tx,
     ) -> Result<Self, Self::Error> {
         match value {
-            crate::generated::ark::v1::get_transactions_stream_response::Tx::Round(round) => {
+            generated::ark::v1::get_transactions_stream_response::Tx::Round(round) => {
                 Ok(TransactionEvent::Round(RoundTransaction::try_from(round)?))
             }
-            crate::generated::ark::v1::get_transactions_stream_response::Tx::Redeem(redeem) => Ok(
+            generated::ark::v1::get_transactions_stream_response::Tx::Redeem(redeem) => Ok(
                 TransactionEvent::Redeem(RedeemTransaction::try_from(redeem)?),
             ),
         }
     }
 }
 
-impl TryFrom<crate::generated::ark::v1::RoundTransaction> for RoundTransaction {
+impl TryFrom<generated::ark::v1::RoundTransaction> for RoundTransaction {
     type Error = Error;
 
-    fn try_from(value: crate::generated::ark::v1::RoundTransaction) -> Result<Self, Self::Error> {
+    fn try_from(value: generated::ark::v1::RoundTransaction) -> Result<Self, Self::Error> {
         let spent_vtxos = value
             .spent_vtxos
             .into_iter()
@@ -722,10 +653,10 @@ impl TryFrom<crate::generated::ark::v1::RoundTransaction> for RoundTransaction {
     }
 }
 
-impl TryFrom<crate::generated::ark::v1::RedeemTransaction> for RedeemTransaction {
+impl TryFrom<generated::ark::v1::RedeemTransaction> for RedeemTransaction {
     type Error = Error;
 
-    fn try_from(value: crate::generated::ark::v1::RedeemTransaction) -> Result<Self, Self::Error> {
+    fn try_from(value: generated::ark::v1::RedeemTransaction) -> Result<Self, Self::Error> {
         let spent_vtxos = value
             .spent_vtxos
             .into_iter()
@@ -739,7 +670,6 @@ impl TryFrom<crate::generated::ark::v1::RedeemTransaction> for RedeemTransaction
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(RedeemTransaction {
-            // TODO: error handling
             txid: Txid::from_str(value.txid.as_str()).map_err(Error::conversion)?,
             spent_vtxos,
             spendable_vtxos,

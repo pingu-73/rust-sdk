@@ -1,29 +1,14 @@
-use crate::asp::Error;
 use crate::generated;
-use ark_core::asp::VtxoOutPoint;
+use crate::Error;
+use ark_core::asp;
 use base64::Engine;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::Address;
 use bitcoin::Amount;
-use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
-use bitcoin::PublicKey;
 
-#[derive(Clone, Debug)]
-pub struct Info {
-    pub pk: PublicKey,
-    pub round_lifetime: bitcoin::Sequence,
-    pub unilateral_exit_delay: bitcoin::Sequence,
-    pub round_interval: i64,
-    pub network: Network,
-    pub dust: Amount,
-    pub boarding_descriptor_template: String,
-    pub vtxo_descriptor_templates: Vec<String>,
-    pub forfeit_address: Address,
-}
-
-impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
+impl TryFrom<generated::ark::v1::GetInfoResponse> for asp::Info {
     type Error = Error;
 
     fn try_from(value: generated::ark::v1::GetInfoResponse) -> Result<Self, Self::Error> {
@@ -44,7 +29,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
             .require_network(network)
             .map_err(Error::conversion)?;
 
-        Ok(Info {
+        Ok(Self {
             pk,
             round_lifetime,
             unilateral_exit_delay,
@@ -58,13 +43,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for Info {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct ListVtxo {
-    pub spent: Vec<VtxoOutPoint>,
-    pub spendable: Vec<VtxoOutPoint>,
-}
-
-impl TryFrom<&generated::ark::v1::Vtxo> for VtxoOutPoint {
+impl TryFrom<&generated::ark::v1::Vtxo> for asp::VtxoOutPoint {
     type Error = Error;
 
     fn try_from(value: &generated::ark::v1::Vtxo) -> Result<Self, Self::Error> {
@@ -84,7 +63,7 @@ impl TryFrom<&generated::ark::v1::Vtxo> for VtxoOutPoint {
             }
         };
 
-        Ok(VtxoOutPoint {
+        Ok(Self {
             outpoint: value
                 .outpoint
                 .clone()

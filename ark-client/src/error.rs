@@ -24,7 +24,7 @@ enum Kind {
     Core(CoreError),
     /// An error related to coin selection of VTXOs and boarding outputs.
     CoinSelect(CoinSelectError),
-    /// An error related to actions within the wallet
+    /// An error related to actions within the wallet.
     Wallet(WalletError),
 }
 
@@ -231,5 +231,11 @@ impl<T> ErrorContext for Result<T, Error> {
 
     fn with_context<E: IntoError>(self, consequent: impl FnOnce() -> E) -> Result<T, Error> {
         self.map_err(|err| err.with_context(consequent))
+    }
+}
+
+impl From<ark_grpc::Error> for Error {
+    fn from(value: ark_grpc::Error) -> Self {
+        Self::asp(value)
     }
 }

@@ -1,6 +1,7 @@
-use crate::asp::ListVtxo;
 use crate::wallet::BoardingWallet;
 use crate::wallet::OnchainWallet;
+use ark_core::asp;
+use ark_core::asp::ListVtxo;
 use ark_core::asp::Round;
 use ark_core::asp::VtxoOutPoint;
 use ark_core::default_vtxo::DefaultVtxo;
@@ -18,35 +19,6 @@ use futures::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[allow(warnings)]
-#[allow(clippy::all)]
-mod generated {
-    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-    pub mod std {
-        #[path = ""]
-        pub mod ark {
-            #[path = "ark.v1.rs"]
-            pub mod v1;
-        }
-    }
-
-    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-    pub use std::*;
-
-    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-    pub mod nostd {
-        #[path = ""]
-        pub mod ark {
-            #[path = "ark.v1.rs"]
-            pub mod v1;
-        }
-    }
-
-    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-    pub use nostd::*;
-}
-
-pub mod asp;
 pub mod error;
 pub mod round;
 pub mod wallet;
@@ -59,7 +31,8 @@ mod utils;
 pub use error::Error;
 
 pub struct OfflineClient<B, W> {
-    asp_client: asp::Client,
+    // TODO: We could introduce a generic interface so that consumers can use either GRPC or REST.
+    asp_client: ark_grpc::Client,
     pub name: String,
     pub kp: Keypair,
     blockchain: Arc<B>,
@@ -127,7 +100,7 @@ where
     ) -> Self {
         let secp = Secp256k1::new();
 
-        let asp_client = asp::Client::new(asp_url);
+        let asp_client = ark_grpc::Client::new(asp_url);
 
         Self {
             asp_client,
@@ -165,7 +138,7 @@ where
     pub fn get_offchain_address(&self) -> (ArkAddress, DefaultVtxo) {
         let asp_info = &self.asp_info;
 
-        let (asp, _) = asp_info.pk.inner.x_only_public_key();
+        let (asp, _) = asp_info.pk.x_only_public_key();
         let (owner, _) = self.inner.kp.public_key().x_only_public_key();
 
         let default_vtxo = DefaultVtxo::new(
@@ -190,7 +163,7 @@ where
     pub fn get_boarding_output(&self) -> Result<BoardingOutput, Error> {
         let asp_info = &self.asp_info;
         self.inner.wallet.new_boarding_output(
-            asp_info.pk.inner.x_only_public_key().0,
+            asp_info.pk.x_only_public_key().0,
             asp_info.unilateral_exit_delay,
             &asp_info.boarding_descriptor_template,
             asp_info.network,
@@ -282,7 +255,7 @@ where
 
     // TODO: GetTransactionHistory.
 
-    fn asp_client(&self) -> asp::Client {
+    fn asp_client(&self) -> ark_grpc::Client {
         self.inner.asp_client.clone()
     }
 

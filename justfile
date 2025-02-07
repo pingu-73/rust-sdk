@@ -24,7 +24,7 @@ build-wasm:
 gen-grpc:
     #!/usr/bin/env bash
 
-    RUSTFLAGS="--cfg genproto" cargo build
+    RUSTFLAGS="--cfg genproto" cargo build -p ark-grpc
 
 ## -------------------------
 ## Local development setup

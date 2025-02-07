@@ -1,4 +1,3 @@
-use crate::asp::RoundStreamEvent;
 use crate::error::ErrorContext;
 use crate::utils::sleep;
 use crate::utils::spawn;
@@ -10,6 +9,7 @@ use crate::Error;
 use crate::ExplorerUtxo;
 use ark_core::asp::RoundInput;
 use ark_core::asp::RoundOutput;
+use ark_core::asp::RoundStreamEvent;
 use ark_core::asp::Tree;
 use ark_core::round;
 use ark_core::round::create_and_sign_forfeit_txs;
@@ -310,7 +310,7 @@ where
 
         let mut step = RoundStep::Start;
 
-        let (asp_pk, _) = asp_info.pk.inner.x_only_public_key();
+        let (asp_pk, _) = asp_info.pk.x_only_public_key();
 
         let mut round_id: Option<String> = None;
         let mut unsigned_round_tx: Option<Psbt> = None;
