@@ -224,7 +224,6 @@ impl PartialSigTree {
 pub fn sign_vtxo_tree(
     round_lifetime: bitcoin::Sequence,
     server_pk: XOnlyPublicKey,
-    // This is a cosigner key pair AFAIK.
     ephemeral_kp: &Keypair,
     vtxo_tree: &Tree,
     round_tx: &Psbt,
@@ -232,6 +231,13 @@ pub fn sign_vtxo_tree(
     mut our_nonce_tree: NonceTree,
     aggregate_pub_nonce_tree: PubNonceTree,
 ) -> Result<PartialSigTree, Error> {
+    let ephemeral_pk = ephemeral_kp.public_key();
+    if !cosigner_pks.contains(&ephemeral_pk) {
+        return Err(Error::crypto(format!(
+            "own ephemeral PK is not present in cosigner PKs: {ephemeral_pk}"
+        )));
+    }
+
     let internal_node_script = VtxoTreeInternalNodeScript::new(round_lifetime, server_pk);
 
     let secp = Secp256k1::new();
