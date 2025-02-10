@@ -415,7 +415,7 @@ where
                         if step != RoundStep::RoundSigningNoncesGenerated {
                             continue;
                         }
-                        tracing::debug!(?e, "Round finalization started");
+                        tracing::debug!(round_id = e.id, "Round finalization started");
 
                         let signed_forfeit_psbts = create_and_sign_forfeit_txs(
                             self.kp(),

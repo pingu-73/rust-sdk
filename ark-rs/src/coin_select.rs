@@ -16,6 +16,8 @@ use std::time::Duration;
 ///
 /// TODO: We should use a coin selection algorithm that takes into account fees e.g.
 /// https://github.com/bitcoindevkit/coin-select.
+///
+/// TODO: Part of this logic needs to be extracted into `ark-core`.
 pub async fn coin_select_for_onchain<B, W>(
     client: &Client<B, W>,
     target_amount: Amount,
@@ -93,12 +95,12 @@ where
                 confirmation_blocktime: Some(confirmation_blocktime),
             } = o
             {
-                let spendable_at =
-                    Duration::from_secs(*confirmation_blocktime) + vtxo.exit_delay_duration();
-
                 // For each confirmed outpoint, check if they can already be spent unilaterally
                 // using the exit path.
-                if spendable_at <= now {
+                if vtxo.can_be_claimed_unilaterally_by_owner(
+                    now,
+                    Duration::from_secs(*confirmation_blocktime),
+                ) {
                     tracing::debug!(?outpoint, %amount, ?vtxo, "Selected VTXO");
 
                     selected_vtxo_outputs.push(unilateral_exit::VtxoInput::new(

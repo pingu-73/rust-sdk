@@ -9,14 +9,14 @@ use ark_core::redeem;
 use ark_core::redeem::create_and_sign_redeem_transaction;
 use ark_core::ArkAddress;
 use bitcoin::Amount;
-use bitcoin::Txid;
+use bitcoin::Psbt;
 
 impl<B, W> Client<B, W>
 where
     B: Blockchain,
     W: BoardingWallet + OnchainWallet,
 {
-    pub async fn send_vtxo(&self, address: ArkAddress, amount: Amount) -> Result<Txid, Error> {
+    pub async fn send_vtxo(&self, address: ArkAddress, amount: Amount) -> Result<Psbt, Error> {
         let spendable_vtxos = self
             .spendable_vtxos()
             .await
@@ -71,14 +71,12 @@ where
         )
         .map_err(Error::from)?;
 
-        let txid = signed_redeem_psbt.unsigned_tx.compute_txid();
-
         self.asp_client()
-            .submit_redeem_transaction(signed_redeem_psbt)
+            .submit_redeem_transaction(signed_redeem_psbt.clone())
             .await
             .map_err(Error::asp)
             .context("failed to complete payment request")?;
 
-        Ok(txid)
+        Ok(signed_redeem_psbt)
     }
 }
