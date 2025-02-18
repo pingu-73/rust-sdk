@@ -105,7 +105,7 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
 }
 
 async fn wait_until_balance(
-    client: &ark_rs::Client<Nigiri, Wallet<InMemoryDb>>,
+    client: &ark_client::Client<Nigiri, Wallet<InMemoryDb>>,
     confirmed_target: Amount,
     pending_target: Amount,
 ) {

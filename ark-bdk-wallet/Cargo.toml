@@ -5,19 +5,19 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
+ark-client = { path = "../ark-client" }
 ark-core = { path = "../ark-core" }
-ark-rs = { path = "../ark-rs" }
 async-stream = "0.3"
-base64 = "0.22.1"
-bdk_esplora = "0.20.1"
 bdk_wallet = "1.0.0"
-bech32 = "0.11"
 bitcoin = { version = "0.32.4", features = ["rand"] }
-esplora-client = { version = "0.11.0", features = ["async-https", "blocking-https"] }
-futures = "0.3.31"
-prost = "0.13.3"
-rand = "0.8.5"
-tokio = { version = "1.41.0", features = ["full"] }
-tonic = "0.12.3"
 tracing = "0.1.37"
-zkp = { package = "secp256k1-zkp", git = "https://github.com/sanket1729/rust-secp256k1-zkp.git", rev = "60e631c24588a0c9e271badd61959294848c665d", features = ["serde", "rand-std"] }
+
+[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
+bdk_esplora = { version = "0.20.1", default-features = false, features = ["async", "async-https"] }
+esplora-client = { version = "0.11.0", default-features = false, features = ["async", "async-https", "tokio"] }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+bdk_esplora = { version = "0.20.1", default-features = false, features = ["std", "async-https"] }
+esplora-client = { version = "0.11.0", default-features = false }
+getrandom = { version = "0.2" } # TODO: Needed?
+gloo-timers = { version = "0.3.0", features = ["futures"] }

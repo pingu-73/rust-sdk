@@ -9,7 +9,7 @@ use bitcoin::XOnlyPublicKey;
 #[derive(Debug, Clone, Copy)]
 pub struct ArkAddress {
     hrp: Hrp,
-    asp: XOnlyPublicKey,
+    server: XOnlyPublicKey,
     vtxo_tap_key: TweakedPublicKey,
 }
 
@@ -20,7 +20,7 @@ impl ArkAddress {
 }
 
 impl ArkAddress {
-    pub fn new(network: Network, asp: XOnlyPublicKey, vtxo_tap_key: TweakedPublicKey) -> Self {
+    pub fn new(network: Network, server: XOnlyPublicKey, vtxo_tap_key: TweakedPublicKey) -> Self {
         let hrp = match network {
             Network::Bitcoin => "ark",
             _ => "tark",
@@ -30,7 +30,7 @@ impl ArkAddress {
 
         Self {
             hrp,
-            asp,
+            server,
             vtxo_tap_key,
         }
     }
@@ -38,7 +38,7 @@ impl ArkAddress {
     pub fn encode(&self) -> String {
         let mut bytes = [0u8; 64];
 
-        bytes[..32].copy_from_slice(&self.asp.serialize());
+        bytes[..32].copy_from_slice(&self.server.serialize());
         bytes[32..].copy_from_slice(&self.vtxo_tap_key.serialize());
 
         bech32::encode::<Bech32m>(self.hrp, bytes.as_slice()).expect("data can be encoded")
@@ -47,7 +47,7 @@ impl ArkAddress {
     pub fn decode(value: &str) -> Result<Self, Error> {
         let (hrp, bytes) = bech32::decode(value).map_err(Error::address_format)?;
 
-        let asp = XOnlyPublicKey::from_slice(&bytes[..32]).map_err(Error::address_format)?;
+        let server = XOnlyPublicKey::from_slice(&bytes[..32]).map_err(Error::address_format)?;
         let vtxo_tap_key =
             XOnlyPublicKey::from_slice(&bytes[32..]).map_err(Error::address_format)?;
 
@@ -57,7 +57,7 @@ impl ArkAddress {
 
         Ok(Self {
             hrp,
-            asp,
+            server,
             vtxo_tap_key,
         })
     }
@@ -78,9 +78,9 @@ mod tests {
         let hrp = decoded.hrp.to_string();
         assert_eq!(hrp, "tark");
 
-        let asp = decoded.asp.serialize().as_hex().to_string();
+        let server = decoded.server.serialize().as_hex().to_string();
         assert_eq!(
-            asp,
+            server,
             "33ffb3dee353b1a9ebe4ced64b946238d0a4ac364f275d771da6ad2445d07ae0"
         );
 
