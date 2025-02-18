@@ -175,7 +175,7 @@ where
 
         let mut vtxos = vec![];
         for (address, _) in addresses.into_iter() {
-            let list = self.network_client().list_vtxos(address).await?;
+            let list = self.network_client().list_vtxos(&address).await?;
             vtxos.push(list);
         }
 
@@ -197,7 +197,7 @@ where
 
         let mut spendable = vec![];
         for (address, vtxo) in addresses.into_iter() {
-            let vtxos = self.network_client().list_vtxos(address).await?;
+            let vtxos = self.network_client().list_vtxos(&address).await?;
             let explorer_utxos = self.blockchain().find_outpoints(vtxo.address()).await?;
 
             let mut vtxo_outpoints = Vec::new();

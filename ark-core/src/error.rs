@@ -233,3 +233,5 @@ impl<T> ErrorContext for Result<T, Error> {
         self.map_err(|err| err.with_context(consequent))
     }
 }
+
+impl StdError for Error {}

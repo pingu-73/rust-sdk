@@ -53,9 +53,9 @@ impl VtxoInput {
 /// the inputs will still need a signature from the Ark server.
 pub fn create_and_sign_redeem_transaction(
     kp: &Keypair,
-    to_address: ArkAddress,
+    to_address: &ArkAddress,
     to_amount: Amount,
-    change_address: ArkAddress,
+    change_address: &ArkAddress,
     vtxo_inputs: &[VtxoInput],
 ) -> Result<Psbt, Error> {
     if vtxo_inputs.is_empty() {

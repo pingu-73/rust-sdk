@@ -4,6 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1"
 ark-core = { path = "../ark-core" }
-ark-rest = { path = "../ark-rest" }
-tokio = { version = "1.41.0", features = ["macros", "rt-multi-thread"] }
+ark-grpc = { path = "../ark-grpc" }
+bitcoin = { version = "0.32" }
+clap = { version = "4", features = ["derive"] }
+esplora-client = { version = "0.10", features = ["async-https"] }
+futures = "0.3"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_derive = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+toml = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "env-filter", "time", "tracing-log", "json"] }

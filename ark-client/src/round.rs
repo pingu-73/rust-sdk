@@ -249,12 +249,12 @@ where
                 .into_iter()
                 .map(|v| RoundInput::new(Some(v.outpoint()), v.vtxo().tapscripts()));
 
-            boarding_inputs.chain(vtxo_inputs).collect()
+            boarding_inputs.chain(vtxo_inputs).collect::<Vec<_>>()
         };
 
         let payment_id = self
             .network_client()
-            .register_inputs_for_next_round(ephemeral_kp.public_key(), inputs)
+            .register_inputs_for_next_round(ephemeral_kp.public_key(), &inputs)
             .await
             .map_err(Error::from)
             .context("failed to register round inputs")?;
@@ -280,7 +280,7 @@ where
         }
 
         self.network_client()
-            .register_outputs_for_next_round(payment_id.clone(), outputs)
+            .register_outputs_for_next_round(payment_id.clone(), &outputs)
             .await?;
 
         let network_client = self.network_client();

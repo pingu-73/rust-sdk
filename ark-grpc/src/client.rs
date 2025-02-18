@@ -73,19 +73,15 @@ impl Client {
     pub async fn get_info(&mut self) -> Result<Info, Error> {
         let mut client = self.inner_client()?;
 
-        log::info!("1");
-
         let response = client
             .get_info(GetInfoRequest {})
             .await
             .map_err(Error::request)?;
 
-        log::info!("2");
-
         response.into_inner().try_into()
     }
 
-    pub async fn list_vtxos(&self, address: ArkAddress) -> Result<ListVtxo, Error> {
+    pub async fn list_vtxos(&self, address: &ArkAddress) -> Result<ListVtxo, Error> {
         let address = address.encode();
 
         let mut client = self.inner_client()?;
@@ -115,7 +111,7 @@ impl Client {
     pub async fn register_inputs_for_next_round(
         &self,
         ephemeral_key: PublicKey,
-        inputs: Vec<RoundInput>,
+        inputs: &[RoundInput],
     ) -> Result<String, Error> {
         let mut client = self.inner_client()?;
 
@@ -154,7 +150,7 @@ impl Client {
     pub async fn register_outputs_for_next_round(
         &self,
         request_id: String,
-        outpouts: Vec<RoundOutput>,
+        outpouts: &[RoundOutput],
     ) -> Result<(), Error> {
         let mut client = self.inner_client()?;
 
