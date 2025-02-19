@@ -13,6 +13,7 @@ base64 = "0.22.1"
 bech32 = "0.11"
 bitcoin = { version = "0.32.4", features = ["rand"] }
 futures = "0.3.31"
+jiff = "0.2.1"
 prost = "0.13.3"
 prost-types = "0.13.3"
 rand = "0.8"

@@ -47,6 +47,17 @@ impl TryFrom<&generated::ark::v1::Vtxo> for server::VtxoOutPoint {
     type Error = Error;
 
     fn try_from(value: &generated::ark::v1::Vtxo) -> Result<Self, Self::Error> {
+        let outpoint = value.outpoint.as_ref().expect("outpoint");
+        let outpoint = OutPoint {
+            txid: outpoint.txid.parse().map_err(Error::conversion)?,
+            vout: outpoint.vout,
+        };
+
+        let spent_by = match value.spent_by.is_empty() {
+            true => None,
+            false => Some(value.spent_by.parse().map_err(Error::conversion)?),
+        };
+
         let redeem_tx = match value.redeem_tx.is_empty() {
             true => None,
             false => {
@@ -64,19 +75,10 @@ impl TryFrom<&generated::ark::v1::Vtxo> for server::VtxoOutPoint {
         };
 
         Ok(Self {
-            outpoint: value
-                .outpoint
-                .clone()
-                .map(|out| {
-                    Ok(OutPoint {
-                        txid: out.txid.parse().map_err(Error::conversion)?,
-                        vout: out.vout,
-                    })
-                })
-                .transpose()?,
+            outpoint,
             spent: value.spent,
             round_txid: value.round_txid.parse().map_err(Error::conversion)?,
-            spent_by: value.spent_by.clone(),
+            spent_by,
             expire_at: value.expire_at,
             swept: value.swept,
             is_pending: value.is_pending,

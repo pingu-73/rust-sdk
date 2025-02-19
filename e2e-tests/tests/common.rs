@@ -6,6 +6,7 @@ use ark_client::Blockchain;
 use ark_client::Client;
 use ark_client::ExplorerUtxo;
 use ark_client::OfflineClient;
+use ark_client::SpendStatus;
 use ark_core::BoardingOutput;
 use bitcoin::hex::FromHex;
 use bitcoin::key::Keypair;
@@ -154,6 +155,8 @@ impl Blockchain for Nigiri {
                         },
                         amount: Amount::from_sat(v.value),
                         confirmation_blocktime,
+                        // Assume the output is unspent until we dig deeper, further down.
+                        is_spent: false,
                     })
                     .collect::<Vec<_>>()
             })
@@ -171,8 +174,12 @@ impl Blockchain for Nigiri {
                 Some(esplora_client::OutputStatus { spent: false, .. }) | None => {
                     utxos.push(*output);
                 }
-                // Ignore spent transaction outputs
-                Some(esplora_client::OutputStatus { spent: true, .. }) => {}
+                Some(esplora_client::OutputStatus { spent: true, .. }) => {
+                    utxos.push(ExplorerUtxo {
+                        is_spent: true,
+                        ..*output
+                    })
+                }
             }
         }
 
@@ -183,6 +190,17 @@ impl Blockchain for Nigiri {
         let tx = self.esplora_client.get_tx(txid).unwrap();
 
         Ok(tx)
+    }
+
+    async fn get_output_status(&self, txid: &Txid, vout: u32) -> Result<SpendStatus, Error> {
+        let status = self
+            .esplora_client
+            .get_output_status(txid, vout as u64)
+            .unwrap();
+
+        Ok(SpendStatus {
+            spend_txid: status.and_then(|s| s.txid),
+        })
     }
 
     // TODO: Make sure we return a proper error here, so that we can retry if we encounter a

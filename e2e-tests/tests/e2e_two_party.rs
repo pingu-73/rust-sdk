@@ -24,10 +24,10 @@ pub async fn e2e() {
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
     let bob_offchain_balance = bob.offchain_balance().await.unwrap();
-    let alice_boarding_output = alice.get_boarding_output().unwrap();
+    let alice_boarding_address = alice.get_boarding_address().unwrap();
 
     tracing::info!(
-        ?alice_boarding_output,
+        ?alice_boarding_address,
         ?alice_offchain_balance,
         ?bob_offchain_balance,
         "Funding Alice's boarding output"
@@ -39,7 +39,7 @@ pub async fn e2e() {
     let alice_fund_amount = Amount::ONE_BTC;
 
     let alice_boarding_outpoint = nigiri
-        .faucet_fund(alice_boarding_output.address(), alice_fund_amount)
+        .faucet_fund(&alice_boarding_address, alice_fund_amount)
         .await;
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();

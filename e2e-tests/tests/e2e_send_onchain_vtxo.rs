@@ -31,12 +31,12 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
 
     assert_eq!(offchain_balance.total(), Amount::ZERO);
 
-    let alice_boarding_output = alice.get_boarding_output().unwrap();
+    let alice_boarding_address = alice.get_boarding_address().unwrap();
 
     let fund_amount = Amount::ONE_BTC;
 
     nigiri
-        .faucet_fund(alice_boarding_output.address(), fund_amount)
+        .faucet_fund(&alice_boarding_address, fund_amount)
         .await;
 
     let offchain_balance = alice.offchain_balance().await.unwrap();
@@ -52,9 +52,9 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
     // Get one confirmation on the VTXO.
     nigiri.mine(1).await;
 
-    let alice_boarding_output = alice.get_boarding_output().unwrap();
+    let alice_boarding_address = alice.get_boarding_address().unwrap();
     nigiri
-        .faucet_fund(alice_boarding_output.address(), Amount::ONE_BTC)
+        .faucet_fund(&alice_boarding_address, Amount::ONE_BTC)
         .await;
 
     let offchain_balance = alice.offchain_balance().await.unwrap();

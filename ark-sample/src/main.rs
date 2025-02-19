@@ -4,6 +4,8 @@
 use anyhow::bail;
 use anyhow::Result;
 use ark_core::coin_select::select_vtxos;
+use ark_core::generate_incoming_vtxo_transaction_history;
+use ark_core::generate_outgoing_vtxo_transaction_history;
 use ark_core::redeem;
 use ark_core::redeem::create_and_sign_redeem_transaction;
 use ark_core::round;
@@ -16,6 +18,7 @@ use ark_core::server::RoundOutput;
 use ark_core::server::RoundStreamEvent;
 use ark_core::server::VtxoOutPoint;
 use ark_core::ArkAddress;
+use ark_core::ArkTransaction;
 use ark_core::BoardingOutput;
 use ark_core::DefaultVtxo;
 use bitcoin::key::Keypair;
@@ -31,6 +34,7 @@ use bitcoin::XOnlyPublicKey;
 use clap::Parser;
 use clap::Subcommand;
 use futures::StreamExt;
+use jiff::Timestamp;
 use rand::thread_rng;
 use serde::Deserialize;
 use std::fs;
@@ -57,6 +61,8 @@ struct Cli {
 enum Commands {
     /// Show the balance.
     Balance,
+    /// Show the transaction history.
+    TransactionHistory,
     /// Generate a boarding address.
     BoardingAddress,
     /// Generate an Ark address.
@@ -153,6 +159,19 @@ async fn main() -> Result<()> {
                 boarding_outputs.pending_balance()
             );
         }
+        Commands::TransactionHistory => {
+            let txs: Vec<ArkTransaction> = transaction_history(
+                &grpc_client,
+                &esplora_client,
+                &[boarding_output.address().clone()],
+                &[default_vtxo],
+            )
+            .await?;
+
+            for tx in txs.iter() {
+                println!("{}\n", pretty_print_transaction(tx)?);
+            }
+        }
         Commands::BoardingAddress => {
             let boarding_address = boarding_output.address();
 
@@ -176,7 +195,7 @@ async fn main() -> Result<()> {
                 .spendable
                 .iter()
                 .map(|(outpoint, _)| ark_core::coin_select::VtxoOutPoint {
-                    outpoint: outpoint.outpoint.expect("outpoint"),
+                    outpoint: outpoint.outpoint,
                     expire_at: outpoint.expire_at,
                     amount: outpoint.amount,
                 })
@@ -190,14 +209,10 @@ async fn main() -> Result<()> {
                 .filter(|(outpoint, _)| {
                     selected_outpoints
                         .iter()
-                        .any(|o| Some(o.outpoint) == outpoint.outpoint)
+                        .any(|o| o.outpoint == outpoint.outpoint)
                 })
                 .map(|(outpoint, vtxo)| {
-                    redeem::VtxoInput::new(
-                        vtxo,
-                        outpoint.amount,
-                        outpoint.outpoint.expect("outpoint"),
-                    )
+                    redeem::VtxoInput::new(vtxo, outpoint.amount, outpoint.outpoint)
                 })
                 .collect::<Vec<_>>();
 
@@ -292,29 +307,27 @@ async fn list_vtxos(
         let onchain_vtxos = onchain_explorer.find_outpoints(vtxo.address()).await?;
 
         for vtxo_outpoint in vtxo_outpoints.spendable {
-            if let Some(outpoint) = vtxo_outpoint.outpoint {
-                let now = std::time::UNIX_EPOCH.elapsed()?;
-                match onchain_vtxos
-                    .iter()
-                    .find(|onchain_utxo| onchain_utxo.outpoint == outpoint)
+            let now = std::time::UNIX_EPOCH.elapsed()?;
+            match onchain_vtxos
+                .iter()
+                .find(|onchain_utxo| onchain_utxo.outpoint == vtxo_outpoint.outpoint)
+            {
+                // VTXOs that have been confirmed on the blockchain, but whose
+                // exit path is now _active_, have expired.
+                Some(ExplorerUtxo {
+                    confirmation_blocktime: Some(confirmation_blocktime),
+                    ..
+                }) if vtxo.can_be_claimed_unilaterally_by_owner(
+                    now,
+                    Duration::from_secs(*confirmation_blocktime),
+                ) =>
                 {
-                    // VTXOs that have been confirmed on the blockchain, but whose
-                    // exit path is now _active_, have expired.
-                    Some(ExplorerUtxo {
-                        confirmation_blocktime: Some(confirmation_blocktime),
-                        ..
-                    }) if vtxo.can_be_claimed_unilaterally_by_owner(
-                        now,
-                        Duration::from_secs(*confirmation_blocktime),
-                    ) =>
-                    {
-                        expired.push((vtxo_outpoint, vtxo.clone()));
-                    }
-                    // All other VTXOs (either still offchain or on-chain but with an inactive exit
-                    // path) are spendable.
-                    _ => {
-                        spendable.push((vtxo_outpoint, vtxo.clone()));
-                    }
+                    expired.push((vtxo_outpoint, vtxo.clone()));
+                }
+                // All other VTXOs (either still offchain or on-chain but with an inactive exit
+                // path) are spendable.
+                _ => {
+                    spendable.push((vtxo_outpoint, vtxo.clone()));
                 }
             }
         }
@@ -330,6 +343,8 @@ struct BoardingOutputs {
     expired: Vec<(OutPoint, Amount, BoardingOutput)>,
     /// Boarding outputs that are not yet confirmed on-chain.
     pending: Vec<(OutPoint, Amount, BoardingOutput)>,
+    /// Boarding outputs that were already spent.
+    _spent: Vec<(OutPoint, Amount)>,
 }
 
 impl BoardingOutputs {
@@ -353,6 +368,7 @@ async fn list_boarding_outputs(
     let mut spendable = Vec::new();
     let mut expired = Vec::new();
     let mut pending = Vec::new();
+    let mut spent = Vec::new();
     for boarding_output in boarding_outputs.iter() {
         let boarding_address = boarding_output.address();
 
@@ -366,6 +382,7 @@ async fn list_boarding_outputs(
                     confirmation_blocktime: Some(confirmation_blocktime),
                     outpoint,
                     amount,
+                    is_spent: false,
                 } => {
                     let now = std::time::UNIX_EPOCH.elapsed()?;
 
@@ -387,9 +404,17 @@ async fn list_boarding_outputs(
                     confirmation_blocktime: None,
                     outpoint,
                     amount,
+                    is_spent: false,
                 } => {
                     pending.push((outpoint, amount, boarding_output.clone()));
                 }
+                // The boarding output was spent.
+                ExplorerUtxo {
+                    outpoint,
+                    amount,
+                    is_spent: true,
+                    ..
+                } => spent.push((outpoint, amount)),
             }
         }
     }
@@ -398,6 +423,7 @@ async fn list_boarding_outputs(
         spendable,
         expired,
         pending,
+        _spent: spent,
     })
 }
 
@@ -423,7 +449,7 @@ async fn settle(
             .spendable
             .clone()
             .into_iter()
-            .map(|o| RoundInput::new(Some(o.0), o.2.tapscripts()));
+            .map(|o| RoundInput::new(o.0, o.2.tapscripts()));
 
         let vtxo_inputs = vtxos
             .spendable
@@ -456,7 +482,6 @@ async fn settle(
         "Registered round outputs"
     );
 
-    // We must ping once. TODO: Is that enough?
     grpc_client.ping(payment_id).await?;
 
     let mut event_stream = grpc_client.get_event_stream().await?;
@@ -526,13 +551,7 @@ async fn settle(
     let vtxo_inputs = vtxos
         .spendable
         .into_iter()
-        .map(|(outpoint, vtxo)| {
-            round::VtxoInput::new(
-                vtxo,
-                outpoint.amount,
-                outpoint.outpoint.expect("VTXO outpoint"),
-            )
-        })
+        .map(|(outpoint, vtxo)| round::VtxoInput::new(vtxo, outpoint.amount, outpoint.outpoint))
         .collect::<Vec<_>>();
 
     let keypair = Keypair::from_secret_key(&secp, &sk);
@@ -586,6 +605,12 @@ pub struct ExplorerUtxo {
     pub outpoint: OutPoint,
     pub amount: Amount,
     pub confirmation_blocktime: Option<u64>,
+    pub is_spent: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SpendStatus {
+    pub spend_txid: Option<Txid>,
 }
 
 impl EsploraClient {
@@ -618,6 +643,8 @@ impl EsploraClient {
                         },
                         amount: Amount::from_sat(v.value),
                         confirmation_blocktime: tx.status.block_time,
+                        // Assume the output is unspent until we dig deeper, further down.
+                        is_spent: false,
                     })
                     .collect::<Vec<_>>()
             })
@@ -635,13 +662,172 @@ impl EsploraClient {
                 Some(esplora_client::OutputStatus { spent: false, .. }) | None => {
                     utxos.push(*output);
                 }
-                // Ignore spent transaction outputs
-                Some(esplora_client::OutputStatus { spent: true, .. }) => {}
+                Some(esplora_client::OutputStatus { spent: true, .. }) => {
+                    utxos.push(ExplorerUtxo {
+                        is_spent: true,
+                        ..*output
+                    });
+                }
             }
         }
 
         Ok(utxos)
     }
+
+    async fn get_output_status(&self, txid: &Txid, vout: u32) -> Result<SpendStatus> {
+        let status = self
+            .esplora_client
+            .get_output_status(txid, vout as u64)
+            .await?;
+
+        Ok(SpendStatus {
+            spend_txid: status.and_then(|s| s.txid),
+        })
+    }
+}
+
+async fn transaction_history(
+    grpc_client: &ark_grpc::Client,
+    onchain_explorer: &EsploraClient,
+    boarding_addresses: &[bitcoin::Address],
+    vtxos: &[DefaultVtxo],
+) -> Result<Vec<ArkTransaction>> {
+    let mut boarding_transactions = Vec::new();
+    let mut boarding_round_transactions = Vec::new();
+
+    for boarding_address in boarding_addresses.iter() {
+        let outpoints = onchain_explorer.find_outpoints(boarding_address).await?;
+
+        for ExplorerUtxo {
+            outpoint,
+            amount,
+            confirmation_blocktime,
+            ..
+        } in outpoints.iter()
+        {
+            let confirmed_at = confirmation_blocktime.map(|t| t as i64);
+
+            boarding_transactions.push(ArkTransaction::Boarding {
+                txid: outpoint.txid,
+                amount: *amount,
+                confirmed_at,
+            });
+
+            let status = onchain_explorer
+                .get_output_status(&outpoint.txid, outpoint.vout)
+                .await?;
+
+            if let Some(spend_txid) = status.spend_txid {
+                boarding_round_transactions.push(spend_txid);
+            }
+        }
+    }
+
+    let mut incoming_transactions = Vec::new();
+    let mut outgoing_transactions = Vec::new();
+    for vtxo in vtxos.iter() {
+        let vtxos = grpc_client.list_vtxos(&vtxo.to_ark_address()).await?;
+
+        let mut new_incoming_transactions = generate_incoming_vtxo_transaction_history(
+            &vtxos.spent,
+            &vtxos.spendable,
+            &boarding_round_transactions,
+        )?;
+
+        incoming_transactions.append(&mut new_incoming_transactions);
+
+        let mut new_outgoing_transactions =
+            generate_outgoing_vtxo_transaction_history(&vtxos.spent, &vtxos.spendable)?;
+
+        outgoing_transactions.append(&mut new_outgoing_transactions);
+    }
+
+    let mut txs = [
+        boarding_transactions,
+        incoming_transactions,
+        outgoing_transactions,
+    ]
+    .concat();
+
+    txs.sort_by_key(|b| std::cmp::Reverse(b.created_at()));
+
+    Ok(txs)
+}
+
+fn pretty_print_transaction(tx: &ArkTransaction) -> Result<String> {
+    let print_str = match tx {
+        ArkTransaction::Boarding {
+            txid,
+            amount,
+            confirmed_at,
+        } => {
+            let time = match confirmed_at {
+                Some(t) => format!("{}", Timestamp::from_second(*t)?),
+                None => "Pending confirmation".to_string(),
+            };
+
+            format!(
+                "Type: Boarding\n\
+                 TXID: {txid}\n\
+                 Status: Received\n\
+                 Amount: {amount}\n\
+                 Time: {time}"
+            )
+        }
+        ArkTransaction::Round {
+            txid,
+            amount,
+            created_at,
+        } => {
+            let status = match amount.is_positive() {
+                true => "Received",
+                false => "Sent",
+            };
+
+            let amount = amount.abs();
+
+            let time = Timestamp::from_second(*created_at)?;
+
+            format!(
+                "Type: Round\n\
+                 TXID: {txid}\n\
+                 Status: {status}\n\
+                 Amount: {amount}\n\
+                 Time: {time}"
+            )
+        }
+        ArkTransaction::Redeem {
+            txid,
+            amount,
+            is_settled,
+            created_at,
+        } => {
+            let status = match amount.is_positive() {
+                true => "Received",
+                false => "Sent",
+            };
+
+            let settlement = match is_settled {
+                true => "Confirmed",
+                false => "Pending",
+            };
+
+            let amount = amount.abs();
+
+            let time = Timestamp::from_second(*created_at)?;
+
+            format!(
+                "Type: Redeem\n\
+                 TXID: {txid}\n\
+                 Status: {status}\n\
+                 Settlement: {settlement}\n\
+                 Amount: {amount}\n\
+                 Time: {time}"
+            )
+        }
+    };
+
+    Ok(print_str)
 }
 
 pub fn init_tracing() {
@@ -653,7 +839,8 @@ pub fn init_tracing() {
              hyper=info,\
              h2=warn,\
              reqwest=info,\
-             ark_core=info",
+             ark_core=info,\
+             rustls=info",
         )
         .init()
 }

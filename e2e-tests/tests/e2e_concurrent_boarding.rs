@@ -25,9 +25,9 @@ pub async fn concurrent_boarding() {
     let bob = set_up_client("bob".to_string(), nigiri.clone(), secp.clone()).await;
     let claire = set_up_client("claire".to_string(), nigiri.clone(), secp.clone()).await;
 
-    let alice_boarding_output = alice.get_boarding_output().unwrap();
-    let bob_boarding_output = bob.get_boarding_output().unwrap();
-    let claire_boarding_output = claire.get_boarding_output().unwrap();
+    let alice_boarding_address = alice.get_boarding_address().unwrap();
+    let bob_boarding_address = bob.get_boarding_address().unwrap();
+    let claire_boarding_address = claire.get_boarding_address().unwrap();
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
     let bob_offchain_balance = bob.offchain_balance().await.unwrap();
@@ -42,13 +42,13 @@ pub async fn concurrent_boarding() {
     let claire_fund_amount = Amount::from_sat(50_000_000);
 
     nigiri
-        .faucet_fund(alice_boarding_output.address(), alice_fund_amount)
+        .faucet_fund(&alice_boarding_address, alice_fund_amount)
         .await;
     nigiri
-        .faucet_fund(bob_boarding_output.address(), bob_fund_amount)
+        .faucet_fund(&bob_boarding_address, bob_fund_amount)
         .await;
     nigiri
-        .faucet_fund(claire_boarding_output.address(), claire_fund_amount)
+        .faucet_fund(&claire_boarding_address, claire_fund_amount)
         .await;
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();

@@ -31,9 +31,9 @@ use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 use futures::FutureExt;
 use futures::StreamExt;
+use jiff::Timestamp;
 use rand::CryptoRng;
 use rand::Rng;
-use std::time::Duration;
 
 impl<B, W> Client<B, W>
 where
@@ -82,7 +82,7 @@ where
             .retry(ExponentialBuilder::default().with_max_times(3))
             .sleep(sleep)
             // TODO: Use `when` to only retry certain errors.
-            .notify(|err: &Error, dur: Duration| {
+            .notify(|err: &Error, dur: std::time::Duration| {
                 tracing::warn!("Retrying joining next Ark round after {dur:?}. Error: {err}",);
             })
             .await
@@ -141,7 +141,7 @@ where
             .retry(ExponentialBuilder::default().with_max_times(3))
             .sleep(sleep)
             // TODO: Use `when` to only retry certain errors.
-            .notify(|err: &Error, dur: Duration| {
+            .notify(|err: &Error, dur: std::time::Duration| {
                 tracing::warn!("Retrying joining next Ark round after {dur:?}. Error: {err}");
             })
             .await
@@ -163,7 +163,7 @@ where
         let mut boarding_inputs: Vec<round::OnChainInput> = Vec::new();
         let mut total_amount = Amount::ZERO;
 
-        let now = std::time::UNIX_EPOCH.elapsed().map_err(Error::ad_hoc)?;
+        let now = Timestamp::now();
 
         // Find outpoints for each boarding output.
         for boarding_output in boarding_outputs {
@@ -177,12 +177,13 @@ where
                     outpoint,
                     amount,
                     confirmation_blocktime: Some(confirmation_blocktime),
+                    is_spent: false,
                 } = o
                 {
                     // Only include confirmed boarding outputs with an _inactive_ exit path.
                     if !boarding_output.can_be_claimed_unilaterally_by_owner(
-                        now,
-                        Duration::from_secs(*confirmation_blocktime),
+                        now.as_duration().try_into().map_err(Error::ad_hoc)?,
+                        std::time::Duration::from_secs(*confirmation_blocktime),
                     ) {
                         boarding_inputs
                             .push(round::OnChainInput::new(boarding_output.clone(), *outpoint));
@@ -209,7 +210,7 @@ where
                         round::VtxoInput::new(
                             vtxo.clone(),
                             vtxo_outpoint.amount,
-                            vtxo_outpoint.outpoint.expect("outpoint"),
+                            vtxo_outpoint.outpoint,
                         )
                     })
                     .collect::<Vec<_>>()
@@ -242,12 +243,12 @@ where
             let boarding_inputs = onchain_inputs
                 .clone()
                 .into_iter()
-                .map(|o| RoundInput::new(Some(o.outpoint()), o.boarding_output().tapscripts()));
+                .map(|o| RoundInput::new(o.outpoint(), o.boarding_output().tapscripts()));
 
             let vtxo_inputs = vtxo_inputs
                 .clone()
                 .into_iter()
-                .map(|v| RoundInput::new(Some(v.outpoint()), v.vtxo().tapscripts()));
+                .map(|v| RoundInput::new(v.outpoint(), v.vtxo().tapscripts()));
 
             boarding_inputs.chain(vtxo_inputs).collect::<Vec<_>>()
         };
@@ -298,7 +299,7 @@ where
                         tracing::warn!("Error via ping: {e:?}");
                     }
 
-                    sleep(Duration::from_millis(5000)).await
+                    sleep(std::time::Duration::from_millis(5000)).await
                 }
             }
         }

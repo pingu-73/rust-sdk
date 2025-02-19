@@ -11,6 +11,7 @@ bitcoin = { version = "0.32" }
 clap = { version = "4", features = ["derive"] }
 esplora-client = { version = "0.10", features = ["async-https"] }
 futures = "0.3"
+jiff = "0.2.1"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_derive = "1"

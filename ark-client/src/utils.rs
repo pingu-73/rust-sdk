@@ -1,5 +1,4 @@
 use futures::Future;
-use std::time::Duration;
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 pub(crate) fn spawn<F>(future: F)
@@ -17,7 +16,7 @@ where
     tokio::spawn(future);
 }
 
-pub(crate) async fn sleep(duration: Duration) {
+pub(crate) async fn sleep(duration: std::time::Duration) {
     #[cfg(target_arch = "wasm32")]
     {
         gloo_timers::future::sleep(duration).await
