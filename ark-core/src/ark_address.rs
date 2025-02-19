@@ -63,6 +63,12 @@ impl ArkAddress {
     }
 }
 
+impl std::fmt::Display for ArkAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.encode())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

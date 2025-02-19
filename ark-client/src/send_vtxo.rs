@@ -68,9 +68,9 @@ where
 
         let signed_redeem_psbt = create_and_sign_redeem_transaction(
             self.kp(),
-            address,
+            &address,
             amount,
-            change_address,
+            &change_address,
             &vtxo_inputs,
         )
         .map_err(Error::from)?;
