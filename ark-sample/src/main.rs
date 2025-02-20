@@ -590,7 +590,6 @@ pub struct ExplorerUtxo {
 
 impl EsploraClient {
     pub fn new(url: &str) -> Result<Self> {
-        // TODO: Move to config file.
         let builder = esplora_client::Builder::new(url);
         let esplora_client = builder.build_async()?;
 
