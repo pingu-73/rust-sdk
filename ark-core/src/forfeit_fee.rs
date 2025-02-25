@@ -12,7 +12,6 @@ pub fn compute_forfeit_min_relay_fee(
     forfeit_address: &Address,
 ) -> Amount {
     const INPUT_SIZE: u64 = 32 + 4 + 1 + 4;
-    const P2PKH_SCRIPT_SIG_SIZE: u64 = 1 + 73 + 1 + 33;
     const FORFEIT_LEAF_WITNESS_SIZE: u64 = 64 * 2; // 2 signatures for multisig.
     const TAPROOT_BASE_CONTROL_BLOCK_WITNESS_SIZE: u64 = 33;
     const BASE_OUTPUT_SIZE: u64 = 8 + 1;
@@ -27,6 +26,8 @@ pub fn compute_forfeit_min_relay_fee(
     const P2WSH_OUTPUT_SIZE: u64 = BASE_OUTPUT_SIZE + P2WSH_SIZE;
     const P2TR_OUTPUT_SIZE: u64 = BASE_OUTPUT_SIZE + P2TR_SIZE;
     const BASE_TX_SIZE: u64 = 4 + 4;
+    const TAPROOT_SIGNATURE_WITNESS_SIZE: u64 = 1 + 64;
+    const TAPROOT_KEY_PATH_WITNESS_SIZE: u64 = 1 + TAPROOT_SIGNATURE_WITNESS_SIZE;
 
     let n_inputs = 2;
     let n_outputs = 1;
@@ -35,8 +36,8 @@ pub fn compute_forfeit_min_relay_fee(
     let mut output_size = 0;
 
     // 1 connector input. We use P2PKH for this!
-    input_size += INPUT_SIZE + P2PKH_SCRIPT_SIG_SIZE;
-    witness_size += 1;
+    input_size += INPUT_SIZE;
+    witness_size += TAPROOT_KEY_PATH_WITNESS_SIZE;
 
     // 1 VTXO input.
     input_size += INPUT_SIZE;

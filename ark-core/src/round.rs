@@ -2,7 +2,8 @@ use crate::conversions::from_zkp_xonly;
 use crate::conversions::to_zkp_pk;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::internal_node::VtxoTreeInternalNodeScript;
-use crate::server::Tree;
+use crate::server::TxTree;
+use crate::server::TxTreeNode;
 use crate::BoardingOutput;
 use crate::DefaultVtxo;
 use crate::Error;
@@ -32,6 +33,7 @@ use bitcoin::XOnlyPublicKey;
 use rand::CryptoRng;
 use rand::Rng;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use zkp::new_musig_nonce_pair;
 use zkp::MusigAggNonce;
 use zkp::MusigKeyAggCache;
@@ -40,6 +42,13 @@ use zkp::MusigPubNonce;
 use zkp::MusigSecNonce;
 use zkp::MusigSession;
 use zkp::MusigSessionId;
+
+/// The cosigner PKs that sign a VTXO TX input are included in the `unknown` key-value map field of
+/// that input in the VTXO PSBT. Since the `unknown` field can be used for any purpose, we know that
+/// a value is a cosigner PK if the corresponding key starts with this prefix.
+///
+/// The byte value corresponds to the string "cosigner".
+const COSIGNER_PSBT_KEY_PREFIX: [u8; 8] = [111, 115, 105, 103, 110, 101, 114, 0];
 
 /// A UTXO that is primed to become a VTXO. Alternatively, the owner of this UTXO may decide to
 /// spend it into a vanilla UTXO.
@@ -112,7 +121,8 @@ impl VtxoInput {
 /// The [`MusigSecNonce`] element of the tuple is an [`Option`] because it cannot be cloned or
 /// copied. We use the [`Option`] to move it into the [`NonceTree`] during nonce generation, and out
 /// of the [`NonceTree`] when signing the VTXO tree.
-pub struct NonceTree(Vec<Vec<(Option<MusigSecNonce>, MusigPubNonce)>>);
+#[allow(clippy::type_complexity)]
+pub struct NonceTree(Vec<Vec<Option<(Option<MusigSecNonce>, MusigPubNonce)>>>);
 
 impl NonceTree {
     /// Take ownership of the [`MusigSecNonce`] at level `i` and branch `j` in the tree.
@@ -122,7 +132,11 @@ impl NonceTree {
     pub fn take_sk(&mut self, i: usize, j: usize) -> Option<MusigSecNonce> {
         self.0
             .get_mut(i)
-            .and_then(|level| level.get_mut(j).map(|(sec, _)| sec.take()))
+            .and_then(|level| {
+                level
+                    .get_mut(j)
+                    .map(|v| v.as_mut().and_then(|(sec, _)| sec.take()))
+            })
             .flatten()
     }
 
@@ -134,7 +148,7 @@ impl NonceTree {
             .map(|level| {
                 level
                     .iter()
-                    .map(|(_, pub_nonce)| *pub_nonce)
+                    .map(|v| v.as_ref().map(|(_, pub_nonce)| *pub_nonce))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -144,22 +158,27 @@ impl NonceTree {
 }
 
 /// A public nonce per shared internal (non-leaf) node in the VTXO tree.
-pub struct PubNonceTree(Vec<Vec<MusigPubNonce>>);
+#[derive(Debug)]
+pub struct PubNonceTree(Vec<Vec<Option<MusigPubNonce>>>);
 
 impl PubNonceTree {
     /// Get the [`MusigPubNonce`] at level `i` and branch `j` in the tree.
     pub fn get(&self, i: usize, j: usize) -> Option<MusigPubNonce> {
-        self.0.get(i).and_then(|level| level.get(j)).copied()
+        self.0
+            .get(i)
+            .and_then(|level| level.get(j))
+            .copied()
+            .flatten()
     }
 
     /// Get the underlying matrix of [`MusigPubNonce`]s.
-    pub fn into_inner(self) -> Vec<Vec<MusigPubNonce>> {
+    pub fn into_inner(self) -> Vec<Vec<Option<MusigPubNonce>>> {
         self.0
     }
 }
 
-impl From<Vec<Vec<MusigPubNonce>>> for PubNonceTree {
-    fn from(value: Vec<Vec<MusigPubNonce>>) -> Self {
+impl From<Vec<Vec<Option<MusigPubNonce>>>> for PubNonceTree {
+    fn from(value: Vec<Vec<Option<MusigPubNonce>>>) -> Self {
         Self(value)
     }
 }
@@ -167,8 +186,8 @@ impl From<Vec<Vec<MusigPubNonce>>> for PubNonceTree {
 /// Generate a nonce pair for each internal (non-leaf) node in the VTXO tree.
 pub fn generate_nonce_tree<R>(
     rng: &mut R,
-    unsigned_vtxo_tree: &Tree,
-    ephemeral_pk: PublicKey,
+    unsigned_vtxo_tree: &TxTree,
+    own_cosigner_pk: PublicKey,
 ) -> Result<NonceTree, Error>
 where
     R: Rng + CryptoRng,
@@ -182,7 +201,13 @@ where
             level
                 .nodes
                 .iter()
-                .map(|_| {
+                .map(|node| {
+                    let cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(&node.tx)?;
+
+                    if !cosigner_pks.contains(&own_cosigner_pk) {
+                        return Ok(None);
+                    }
+
                     let session_id = MusigSessionId::new(rng);
                     let extra_rand = rng.gen();
 
@@ -193,13 +218,13 @@ where
                         session_id,
                         None,
                         None,
-                        to_zkp_pk(ephemeral_pk),
+                        to_zkp_pk(own_cosigner_pk),
                         None,
                         Some(extra_rand),
                     )
                     .map_err(Error::crypto)?;
 
-                    Ok((Some(nonce), pub_nonce))
+                    Ok(Some((Some(nonce), pub_nonce)))
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
@@ -209,63 +234,69 @@ where
 }
 
 /// A Musig partial signature per shared internal (non-leaf) node in the VTXO tree.
-pub struct PartialSigTree(Vec<Vec<MusigPartialSignature>>);
+pub struct PartialSigTree(Vec<Vec<Option<MusigPartialSignature>>>);
 
 impl PartialSigTree {
     /// Get the underlying matrix of [`MusigPartialSignature`]s.
-    pub fn into_inner(self) -> Vec<Vec<MusigPartialSignature>> {
+    pub fn into_inner(self) -> Vec<Vec<Option<MusigPartialSignature>>> {
         self.0
     }
 }
 
-/// Sign each shared internal (non-leaf) node of the VTXO tree with `ephemeral_kp` and using
+/// Sign each shared internal (non-leaf) node of the VTXO tree with `own_cosigner_kp` and using
 /// `our_nonce_tree` to provide our share of each aggregate nonce.
 #[allow(clippy::too_many_arguments)]
 pub fn sign_vtxo_tree(
-    round_lifetime: bitcoin::Sequence,
+    vtxo_tree_expiry: bitcoin::Sequence,
     server_pk: XOnlyPublicKey,
-    ephemeral_kp: &Keypair,
-    vtxo_tree: &Tree,
+    own_cosigner_kp: &Keypair,
+    vtxo_tree: &TxTree,
     round_tx: &Psbt,
-    cosigner_pks: Vec<PublicKey>,
     mut our_nonce_tree: NonceTree,
-    aggregate_pub_nonce_tree: PubNonceTree,
+    aggregate_pub_nonce_tree: &PubNonceTree,
 ) -> Result<PartialSigTree, Error> {
-    let ephemeral_pk = ephemeral_kp.public_key();
-    if !cosigner_pks.contains(&ephemeral_pk) {
-        return Err(Error::crypto(format!(
-            "own ephemeral PK is not present in cosigner PKs: {ephemeral_pk}"
-        )));
-    }
+    let own_cosigner_pk = own_cosigner_kp.public_key();
 
-    let internal_node_script = VtxoTreeInternalNodeScript::new(round_lifetime, server_pk);
+    let internal_node_script = VtxoTreeInternalNodeScript::new(vtxo_tree_expiry, server_pk);
 
     let secp = Secp256k1::new();
     let secp_zkp = zkp::Secp256k1::new();
 
-    let mut cosigner_pks = cosigner_pks.into_iter().map(to_zkp_pk).collect::<Vec<_>>();
-    cosigner_pks.sort_by_key(|k| k.serialize());
+    let own_cosigner_kp =
+        zkp::Keypair::from_seckey_slice(&secp_zkp, &own_cosigner_kp.secret_bytes())
+            .expect("valid keypair");
 
-    let mut key_agg_cache = MusigKeyAggCache::new(&secp_zkp, &cosigner_pks);
-
-    let sweep_tap_tree =
-        internal_node_script.sweep_spend_leaf(&secp, from_zkp_xonly(key_agg_cache.agg_pk()));
-
-    let tweak = zkp::SecretKey::from_slice(sweep_tap_tree.tap_tweak().as_byte_array())
-        .expect("valid conversion");
-
-    key_agg_cache
-        .pubkey_xonly_tweak_add(&secp_zkp, tweak)
-        .map_err(Error::crypto)?;
-
-    let ephemeral_kp = zkp::Keypair::from_seckey_slice(&secp_zkp, &ephemeral_kp.secret_bytes())
-        .expect("valid keypair");
-
-    let mut partial_sig_tree: Vec<Vec<MusigPartialSignature>> = Vec::new();
+    let mut partial_sig_tree: Vec<Vec<Option<MusigPartialSignature>>> = Vec::new();
     for (i, level) in vtxo_tree.levels.iter().enumerate() {
         let mut sigs_level = Vec::new();
         for (j, node) in level.nodes.iter().enumerate() {
+            let mut cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(&node.tx)?;
+            cosigner_pks.sort_by_key(|k| k.serialize());
+
+            if !cosigner_pks.contains(&own_cosigner_pk) {
+                sigs_level.push(None);
+                continue;
+            }
+
             tracing::debug!(i, j, ?node, "Generating partial signature");
+
+            let mut key_agg_cache = {
+                let cosigner_pks = cosigner_pks
+                    .iter()
+                    .map(|pk| to_zkp_pk(*pk))
+                    .collect::<Vec<_>>();
+                MusigKeyAggCache::new(&secp_zkp, &cosigner_pks)
+            };
+
+            let sweep_tap_tree = internal_node_script
+                .sweep_spend_leaf(&secp, from_zkp_xonly(key_agg_cache.agg_pk()));
+
+            let tweak = zkp::SecretKey::from_slice(sweep_tap_tree.tap_tweak().as_byte_array())
+                .expect("valid conversion");
+
+            key_agg_cache
+                .pubkey_xonly_tweak_add(&secp_zkp, tweak)
+                .map_err(Error::crypto)?;
 
             let agg_pub_nonce = aggregate_pub_nonce_tree
                 .get(i, j)
@@ -317,10 +348,10 @@ pub fn sign_vtxo_tree(
                 .ok_or(Error::crypto("missing nonce {i}, {j}"))?;
 
             let sig = MusigSession::new(&secp_zkp, &key_agg_cache, agg_nonce, msg)
-                .partial_sign(&secp_zkp, nonce_sk, &ephemeral_kp, &key_agg_cache)
+                .partial_sign(&secp_zkp, nonce_sk, &own_cosigner_kp, &key_agg_cache)
                 .map_err(Error::crypto)?;
 
-            sigs_level.push(sig);
+            sigs_level.push(Some(sig));
         }
 
         partial_sig_tree.push(sigs_level);
@@ -336,7 +367,8 @@ pub fn create_and_sign_forfeit_txs(
     // `Sign` trait, so that the caller can find the secret key for the given `VtxoInput`.
     kp: &Keypair,
     vtxo_inputs: &[VtxoInput],
-    connector_psbts: Vec<Psbt>,
+    connector_tree: TxTree,
+    connector_index: &HashMap<OutPoint, OutPoint>,
     min_relay_fee_rate_sats_per_kvb: i64,
     server_forfeit_address: &Address,
     // As defined by the server.
@@ -350,6 +382,8 @@ pub fn create_and_sign_forfeit_txs(
     let fee_rate_sats_per_kvb = min_relay_fee_rate_sats_per_kvb as u64;
     let connector_amount = dust;
 
+    let connector_psbts = connector_tree.leaves();
+
     let mut signed_forfeit_psbts = Vec::new();
     for VtxoInput {
         vtxo,
@@ -360,109 +394,122 @@ pub fn create_and_sign_forfeit_txs(
         let min_relay_fee =
             compute_forfeit_min_relay_fee(fee_rate_sats_per_kvb, vtxo, server_forfeit_address);
 
-        let mut connector_inputs = Vec::new();
-        for connector_psbt in connector_psbts.iter() {
-            let txid = connector_psbt.unsigned_tx.compute_txid();
-            for (i, connector_output) in connector_psbt.unsigned_tx.output.iter().enumerate() {
-                if connector_output.value == connector_amount {
-                    connector_inputs.push((
-                        OutPoint {
-                            txid,
-                            vout: i as u32,
-                        },
-                        connector_output,
-                    ));
-                }
-            }
+        let connector_outpoint = connector_index.get(vtxo_outpoint).ok_or_else(|| {
+            Error::ad_hoc(format!(
+                "connector outpoint missing for VTXO outpoint {vtxo_outpoint}"
+            ))
+        })?;
+
+        for TxTreeNode {
+            tx: connector_psbt, ..
+        } in connector_psbts.iter()
+        {
+            let connector_txid = connector_psbt.unsigned_tx.compute_txid();
+            if connector_txid == connector_outpoint.txid {}
         }
+
+        let connector_output = connector_psbts
+            .iter()
+            .find(
+                |TxTreeNode {
+                     tx: connector_psbt, ..
+                 }| {
+                    let connector_txid = connector_psbt.unsigned_tx.compute_txid();
+                    connector_txid == connector_outpoint.txid
+                },
+            )
+            .map(|node| {
+                let txout = node
+                    .tx
+                    .unsigned_tx
+                    .tx_out(connector_outpoint.vout as usize)
+                    .map_err(Error::ad_hoc)?;
+
+                Ok(txout.clone())
+            })
+            .ok_or_else(|| {
+                Error::ad_hoc(format!(
+                    "connector output missing for VTXO outpoint {vtxo_outpoint}"
+                ))
+            })??;
 
         let forfeit_output = TxOut {
             value: *vtxo_amount + connector_amount - min_relay_fee,
             script_pubkey: server_forfeit_address.script_pubkey(),
         };
 
-        let mut forfeit_psbts = Vec::new();
-        // It seems like we are signing multiple forfeit transactions per VTXO i.e. it seems like
-        // the Ark server will be able to publish different versions of the same forfeit
-        // transaction. This might be useful because it gives the Ark server more flexibility?
-        for (connector_outpoint, connector_output) in connector_inputs.into_iter() {
-            let mut forfeit_psbt = Psbt::from_unsigned_tx(Transaction {
-                version: transaction::Version::TWO,
-                lock_time: LockTime::ZERO,
-                input: vec![
-                    TxIn {
-                        previous_output: connector_outpoint,
-                        ..Default::default()
-                    },
-                    TxIn {
-                        previous_output: *vtxo_outpoint,
-                        ..Default::default()
-                    },
-                ],
-                output: vec![forfeit_output.clone()],
-            })
-            .map_err(Error::transaction)?;
+        let mut forfeit_psbt = Psbt::from_unsigned_tx(Transaction {
+            version: transaction::Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![
+                TxIn {
+                    previous_output: *connector_outpoint,
+                    ..Default::default()
+                },
+                TxIn {
+                    previous_output: *vtxo_outpoint,
+                    ..Default::default()
+                },
+            ],
+            output: vec![forfeit_output.clone()],
+        })
+        .map_err(Error::transaction)?;
 
-            forfeit_psbt.inputs[FORFEIT_TX_CONNECTOR_INDEX].witness_utxo =
-                Some(connector_output.clone());
+        forfeit_psbt.inputs[FORFEIT_TX_CONNECTOR_INDEX].witness_utxo =
+            Some(connector_output.clone());
 
-            forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].witness_utxo = Some(TxOut {
-                value: *vtxo_amount,
-                script_pubkey: vtxo.script_pubkey(),
-            });
+        forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].witness_utxo = Some(TxOut {
+            value: *vtxo_amount,
+            script_pubkey: vtxo.script_pubkey(),
+        });
 
-            forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].sighash_type =
-                Some(TapSighashType::Default.into());
+        forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].sighash_type =
+            Some(TapSighashType::Default.into());
 
-            forfeit_psbts.push(forfeit_psbt);
-        }
+        let (forfeit_script, forfeit_control_block) = vtxo.forfeit_spend_info();
 
-        for forfeit_psbt in forfeit_psbts.iter_mut() {
-            let (forfeit_script, forfeit_control_block) = vtxo.forfeit_spend_info();
+        let leaf_version = forfeit_control_block.leaf_version;
+        forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].tap_scripts = BTreeMap::from_iter([(
+            forfeit_control_block,
+            (forfeit_script.clone(), leaf_version),
+        )]);
 
-            let leaf_version = forfeit_control_block.leaf_version;
-            forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].tap_scripts = BTreeMap::from_iter([(
-                forfeit_control_block,
-                (forfeit_script.clone(), leaf_version),
-            )]);
+        let prevouts = forfeit_psbt
+            .inputs
+            .iter()
+            .filter_map(|i| i.witness_utxo.clone())
+            .collect::<Vec<_>>();
+        let prevouts = Prevouts::All(&prevouts);
 
-            let prevouts = forfeit_psbt
-                .inputs
-                .iter()
-                .filter_map(|i| i.witness_utxo.clone())
-                .collect::<Vec<_>>();
-            let prevouts = Prevouts::All(&prevouts);
+        let leaf_hash = TapLeafHash::from_script(&forfeit_script, leaf_version);
 
-            let leaf_hash = TapLeafHash::from_script(&forfeit_script, leaf_version);
+        let tap_sighash = SighashCache::new(&forfeit_psbt.unsigned_tx)
+            .taproot_script_spend_signature_hash(
+                FORFEIT_TX_VTXO_INDEX,
+                &prevouts,
+                leaf_hash,
+                TapSighashType::Default,
+            )
+            .map_err(Error::crypto)?;
 
-            let tap_sighash = SighashCache::new(&forfeit_psbt.unsigned_tx)
-                .taproot_script_spend_signature_hash(
-                    FORFEIT_TX_VTXO_INDEX,
-                    &prevouts,
-                    leaf_hash,
-                    TapSighashType::Default,
-                )
-                .map_err(Error::crypto)?;
+        let msg = secp256k1::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
 
-            let msg = secp256k1::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
+        let sig = secp.sign_schnorr_no_aux_rand(&msg, kp);
+        let pk = kp.x_only_public_key().0;
 
-            let sig = secp.sign_schnorr_no_aux_rand(&msg, kp);
-            let pk = kp.x_only_public_key().0;
+        secp.verify_schnorr(&sig, &msg, &pk)
+            .map_err(Error::crypto)
+            .context("failed to verify own forfeit signature")?;
 
-            secp.verify_schnorr(&sig, &msg, &pk)
-                .map_err(Error::crypto)
-                .context("failed to verify own forfeit signature")?;
+        let sig = taproot::Signature {
+            signature: sig,
+            sighash_type: TapSighashType::Default,
+        };
 
-            let sig = taproot::Signature {
-                signature: sig,
-                sighash_type: TapSighashType::Default,
-            };
+        forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].tap_script_sigs =
+            BTreeMap::from_iter([((pk, leaf_hash), sig)]);
 
-            forfeit_psbt.inputs[FORFEIT_TX_VTXO_INDEX].tap_script_sigs =
-                BTreeMap::from_iter([((pk, leaf_hash), sig)]);
-
-            signed_forfeit_psbts.push(forfeit_psbt.clone());
-        }
+        signed_forfeit_psbts.push(forfeit_psbt.clone());
     }
 
     Ok(signed_forfeit_psbts)
@@ -542,4 +589,21 @@ where
     }
 
     Ok(())
+}
+
+fn extract_cosigner_pks_from_vtxo_psbt(psbt: &Psbt) -> Result<Vec<PublicKey>, Error> {
+    let vtxo_input = &psbt.inputs[VTXO_INPUT_INDEX];
+
+    let mut cosigner_pks = Vec::new();
+    for (key, pk) in vtxo_input.unknown.iter() {
+        if key.key.starts_with(&COSIGNER_PSBT_KEY_PREFIX) {
+            cosigner_pks.push(
+                bitcoin::PublicKey::from_slice(pk)
+                    .map_err(Error::crypto)
+                    .context("invalid PK")?
+                    .inner,
+            );
+        }
+    }
+    Ok(cosigner_pks)
 }

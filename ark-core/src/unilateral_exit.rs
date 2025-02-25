@@ -349,7 +349,7 @@ pub fn prepare_vtxo_tree_transactions(
         let round_txid = round_tx.compute_txid();
         vtxo_trees
             .entry(round_txid)
-            .or_insert_with(|| round.vtxo_tree.clone().expect("we have one"));
+            .or_insert_with(|| round.vtxo_tree.clone());
 
         let vtxo_tree = vtxo_trees.get(&round_txid).expect("is there");
 

@@ -13,17 +13,17 @@ use ark_core::round::generate_nonce_tree;
 use ark_core::round::sign_round_psbt;
 use ark_core::round::sign_vtxo_tree;
 use ark_core::round::NonceTree;
+use ark_core::round::PubNonceTree;
 use ark_core::server::RoundInput;
 use ark_core::server::RoundOutput;
 use ark_core::server::RoundStreamEvent;
-use ark_core::server::Tree;
+use ark_core::server::TxTree;
 use ark_core::ArkAddress;
 use backon::ExponentialBuilder;
 use backon::Retryable;
 use bitcoin::key::Keypair;
 use bitcoin::secp256k1;
 use bitcoin::secp256k1::schnorr;
-use bitcoin::secp256k1::PublicKey;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::Psbt;
@@ -34,6 +34,7 @@ use futures::StreamExt;
 use jiff::Timestamp;
 use rand::CryptoRng;
 use rand::Rng;
+use std::collections::HashMap;
 
 impl<B, W> Client<B, W>
 where
@@ -79,7 +80,7 @@ where
 
         // Joining a round can fail depending on the timing, so we try a few times.
         let txid = join_next_ark_round
-            .retry(ExponentialBuilder::default().with_max_times(3))
+            .retry(ExponentialBuilder::default().with_max_times(0))
             .sleep(sleep)
             // TODO: Use `when` to only retry certain errors.
             .notify(|err: &Error, dur: std::time::Duration| {
@@ -236,8 +237,10 @@ where
 
         let server_info = &self.server_info;
 
-        // Generate an ephemeral key.
-        let ephemeral_kp = Keypair::new(self.secp(), rng);
+        // Generate an (ephemeral) cosigner keypair.
+        let own_cosigner_kp_1 = Keypair::new(self.secp(), rng);
+        // FIXME: We are just testing things.
+        let own_cosigner_kp_2 = Keypair::new(self.secp(), rng);
 
         let inputs = {
             let boarding_inputs = onchain_inputs
@@ -255,7 +258,7 @@ where
 
         let payment_id = self
             .network_client()
-            .register_inputs_for_next_round(ephemeral_kp.public_key(), &inputs)
+            .register_inputs_for_next_round(&inputs)
             .await
             .map_err(Error::from)
             .context("failed to register round inputs")?;
@@ -280,8 +283,13 @@ where
             }
         }
 
+        let own_cosigner_kps = [own_cosigner_kp_1, own_cosigner_kp_2];
+        let own_cosigner_pks = own_cosigner_kps
+            .iter()
+            .map(|k| k.public_key())
+            .collect::<Vec<_>>();
         self.network_client()
-            .register_outputs_for_next_round(payment_id.clone(), &outputs)
+            .register_outputs_for_next_round(payment_id.clone(), &outputs, &own_cosigner_pks, false)
             .await?;
 
         let network_client = self.network_client();
@@ -315,10 +323,8 @@ where
 
         let mut round_id: Option<String> = None;
         let mut unsigned_round_tx: Option<Psbt> = None;
-        let mut vtxo_tree: Option<Tree> = None;
-        let mut cosigner_pks: Option<Vec<PublicKey>> = None;
-
-        let mut our_nonce_tree: Option<NonceTree> = None;
+        let mut vtxo_tree: Option<TxTree> = None;
+        let mut our_nonce_trees: Option<HashMap<Keypair, NonceTree>> = None;
         loop {
             match stream.next().await {
                 Some(Ok(event)) => match event {
@@ -334,29 +340,44 @@ where
                         let unsigned_vtxo_tree =
                             e.unsigned_vtxo_tree.expect("to have an unsigned vtxo tree");
 
-                        let nonce_tree = generate_nonce_tree(
-                            rng,
-                            &unsigned_vtxo_tree,
-                            ephemeral_kp.public_key(),
-                        )
-                        .map_err(Error::from)?;
+                        for own_cosigner_pk in own_cosigner_pks.iter() {
+                            if !&e.cosigners_pubkeys.iter().any(|p| p == own_cosigner_pk) {
+                                return Err(Error::ark_server(format!(
+                                    "own cosigner PK is not present in cosigner PKs: {own_cosigner_pk}"
+                                )));
+                            }
+                        }
 
-                        network_client
-                            .submit_tree_nonces(
-                                e.id,
-                                ephemeral_kp.public_key(),
-                                nonce_tree.to_pub_nonce_tree().into_inner(),
-                            )
-                            .await?;
+                        // We generate and submit a nonce tree for every cosigner key we provide.
+                        let mut our_nonce_tree_map = HashMap::new();
+                        for own_cosigner_kp in own_cosigner_kps {
+                            let own_cosigner_pk = own_cosigner_kp.public_key();
+                            let nonce_tree =
+                                generate_nonce_tree(rng, &unsigned_vtxo_tree, own_cosigner_pk)
+                                    .map_err(Error::from)
+                                    .context("failed to generate VTXO nonce tree")?;
 
-                        our_nonce_tree = Some(nonce_tree);
+                            tracing::info!(
+                                cosigner_pk = %own_cosigner_pk,
+                                "Submitting nonce tree for cosigner PK"
+                            );
+
+                            network_client
+                                .submit_tree_nonces(
+                                    &e.id,
+                                    own_cosigner_pk,
+                                    nonce_tree.to_pub_nonce_tree().into_inner(),
+                                )
+                                .await
+                                .map_err(Error::ark_server)
+                                .context("failed to submit VTXO nonce tree")?;
+
+                            our_nonce_tree_map.insert(own_cosigner_kp, nonce_tree);
+                        }
+
+                        our_nonce_trees = Some(our_nonce_tree_map);
 
                         vtxo_tree = Some(unsigned_vtxo_tree);
-
-                        let cosigner_public_keys =
-                            e.cosigners_pubkeys.into_iter().collect::<Vec<_>>();
-
-                        cosigner_pks = Some(cosigner_public_keys);
 
                         unsigned_round_tx = Some(e.unsigned_round_tx);
 
@@ -368,7 +389,7 @@ where
                             continue;
                         }
 
-                        let agg_pub_nonce_tree = e.tree_nonces;
+                        let agg_pub_nonce_tree = PubNonceTree::from(e.tree_nonces);
 
                         tracing::debug!(
                             round_id = e.id,
@@ -383,32 +404,33 @@ where
                         let vtxo_tree = vtxo_tree
                             .as_ref()
                             .ok_or(Error::ark_server("missing vtxo tree during round protocol"))?;
-                        let cosigner_pks = cosigner_pks.clone().ok_or(Error::ark_server(
-                            "missing cosigner PKs during round protocol",
-                        ))?;
-                        let our_nonce_tree = our_nonce_tree.take().ok_or(Error::ark_server(
+                        let our_nonce_trees = our_nonce_trees.take().ok_or(Error::ark_server(
                             "missing nonce tree during round protocol",
                         ))?;
 
-                        let partial_sig_tree = sign_vtxo_tree(
-                            server_info.vtxo_tree_expiry,
-                            ark_server_pk,
-                            &ephemeral_kp,
-                            vtxo_tree,
-                            unsigned_round_tx,
-                            cosigner_pks,
-                            our_nonce_tree,
-                            agg_pub_nonce_tree.into(),
-                        )
-                        .map_err(Error::from)?;
-
-                        network_client
-                            .submit_tree_signatures(
-                                e.id,
-                                ephemeral_kp.public_key(),
-                                partial_sig_tree.into_inner(),
+                        for (cosigner_kp, our_nonce_tree) in our_nonce_trees {
+                            let partial_sig_tree = sign_vtxo_tree(
+                                server_info.vtxo_tree_expiry,
+                                ark_server_pk,
+                                &cosigner_kp,
+                                vtxo_tree,
+                                unsigned_round_tx,
+                                our_nonce_tree,
+                                &agg_pub_nonce_tree,
                             )
-                            .await?;
+                            .map_err(Error::from)
+                            .context("failed to sign VTXO tree")?;
+
+                            network_client
+                                .submit_tree_signatures(
+                                    &e.id,
+                                    cosigner_kp.public_key(),
+                                    partial_sig_tree.into_inner(),
+                                )
+                                .await
+                                .map_err(Error::ark_server)
+                                .context("failed to submit VTXO tree signatures")?;
+                        }
 
                         step = step.next();
                     }
@@ -422,6 +444,7 @@ where
                             self.kp(),
                             vtxo_inputs.as_slice(),
                             e.connector_tree,
+                            &e.connectors_index,
                             e.min_relay_fee_rate,
                             &server_info.forfeit_address,
                             server_info.dust,

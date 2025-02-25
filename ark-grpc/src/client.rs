@@ -8,6 +8,7 @@ use crate::generated::ark::v1::GetRoundRequest;
 use crate::generated::ark::v1::GetTransactionsStreamRequest;
 use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::ListVtxosRequest;
+use crate::generated::ark::v1::Musig2;
 use crate::generated::ark::v1::Outpoint;
 use crate::generated::ark::v1::Output;
 use crate::generated::ark::v1::PingRequest;
@@ -22,7 +23,6 @@ use crate::tree;
 use crate::Error;
 use ark_core::server::Info;
 use ark_core::server::ListVtxo;
-use ark_core::server::Node;
 use ark_core::server::RedeemTransaction;
 use ark_core::server::Round;
 use ark_core::server::RoundFailedEvent;
@@ -35,8 +35,9 @@ use ark_core::server::RoundSigningNoncesGeneratedEvent;
 use ark_core::server::RoundStreamEvent;
 use ark_core::server::RoundTransaction;
 use ark_core::server::TransactionEvent;
-use ark_core::server::Tree;
-use ark_core::server::TreeLevel;
+use ark_core::server::TxTree;
+use ark_core::server::TxTreeLevel;
+use ark_core::server::TxTreeNode;
 use ark_core::server::VtxoOutPoint;
 use ark_core::ArkAddress;
 use async_stream::stream;
@@ -49,6 +50,7 @@ use bitcoin::Txid;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 #[derive(Debug, Clone)]
@@ -120,8 +122,6 @@ impl Client {
 
     pub async fn register_inputs_for_next_round(
         &self,
-        // TODO: delete or use
-        _ephemeral_key: PublicKey,
         inputs: &[RoundInput],
     ) -> Result<String, Error> {
         let mut client = self.inner_ark_client()?;
@@ -163,6 +163,8 @@ impl Client {
         &self,
         request_id: String,
         outpouts: &[RoundOutput],
+        cosigner_pks: &[PublicKey],
+        signing_all: bool,
     ) -> Result<(), Error> {
         let mut client = self.inner_ark_client()?;
 
@@ -174,14 +176,16 @@ impl Client {
             })
             .collect();
 
-        // TODO: implement me
-        let musig2 = None;
+        let cosigners_public_keys = cosigner_pks.iter().map(|pk| pk.to_string()).collect();
 
         client
             .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
                 request_id,
                 outputs,
-                musig2,
+                musig2: Some(Musig2 {
+                    cosigners_public_keys,
+                    signing_all,
+                }),
             })
             .await
             .map_err(Error::request)?;
@@ -225,19 +229,19 @@ impl Client {
 
     pub async fn submit_tree_nonces(
         &self,
-        round_id: String,
-        ephemeral_pubkey: PublicKey,
-        pub_nonce_tree: Vec<Vec<zkp::MusigPubNonce>>,
+        round_id: &str,
+        cosigner_pubkey: PublicKey,
+        pub_nonce_tree: Vec<Vec<Option<zkp::MusigPubNonce>>>,
     ) -> Result<(), Error> {
         let mut client = self.inner_ark_client()?;
 
-        let nonce_tree = tree::encode_tree(pub_nonce_tree).map_err(Error::conversion)?;
+        let pub_nonce_tree = tree::encode_tree(pub_nonce_tree).map_err(Error::conversion)?;
 
         client
             .submit_tree_nonces(SubmitTreeNoncesRequest {
-                round_id,
-                pubkey: ephemeral_pubkey.to_string(),
-                tree_nonces: nonce_tree.to_lower_hex_string(),
+                round_id: round_id.to_string(),
+                pubkey: cosigner_pubkey.to_string(),
+                tree_nonces: pub_nonce_tree.to_lower_hex_string(),
             })
             .await
             .map_err(Error::request)?;
@@ -247,9 +251,9 @@ impl Client {
 
     pub async fn submit_tree_signatures(
         &self,
-        round_id: String,
-        ephemeral_pubkey: PublicKey,
-        partial_sig_tree: Vec<Vec<zkp::MusigPartialSignature>>,
+        round_id: &str,
+        cosigner_pk: PublicKey,
+        partial_sig_tree: Vec<Vec<Option<zkp::MusigPartialSignature>>>,
     ) -> Result<(), Error> {
         let mut client = self.inner_ark_client()?;
 
@@ -257,8 +261,8 @@ impl Client {
 
         client
             .submit_tree_signatures(SubmitTreeSignaturesRequest {
-                round_id,
-                pubkey: ephemeral_pubkey.to_string(),
+                round_id: round_id.to_string(),
+                pubkey: cosigner_pk.to_string(),
                 tree_signatures: tree_signatures.to_lower_hex_string(),
             })
             .await
@@ -389,7 +393,7 @@ impl Client {
     }
 }
 
-impl TryFrom<generated::ark::v1::Tree> for Tree {
+impl TryFrom<generated::ark::v1::Tree> for TxTree {
     type Error = Error;
 
     fn try_from(value: generated::ark::v1::Tree) -> Result<Self, Self::Error> {
@@ -399,11 +403,11 @@ impl TryFrom<generated::ark::v1::Tree> for Tree {
             .map(|level| level.try_into())
             .collect::<Result<Vec<_>, Error>>()?;
 
-        Ok(Tree { levels })
+        Ok(TxTree { levels })
     }
 }
 
-impl TryFrom<generated::ark::v1::TreeLevel> for TreeLevel {
+impl TryFrom<generated::ark::v1::TreeLevel> for TxTreeLevel {
     type Error = Error;
 
     fn try_from(value: generated::ark::v1::TreeLevel) -> Result<Self, Self::Error> {
@@ -413,11 +417,11 @@ impl TryFrom<generated::ark::v1::TreeLevel> for TreeLevel {
             .map(|node| node.try_into())
             .collect::<Result<Vec<_>, Error>>()?;
 
-        Ok(TreeLevel { nodes })
+        Ok(TxTreeLevel { nodes })
     }
 }
 
-impl TryFrom<generated::ark::v1::Node> for Node {
+impl TryFrom<generated::ark::v1::Node> for TxTreeNode {
     type Error = Error;
 
     fn try_from(value: generated::ark::v1::Node) -> Result<Self, Self::Error> {
@@ -434,7 +438,7 @@ impl TryFrom<generated::ark::v1::Node> for Node {
 
         let parent_txid: Txid = value.parent_txid.parse().map_err(Error::conversion)?;
 
-        Ok(Node {
+        Ok(TxTreeNode {
             txid,
             tx,
             parent_txid,
@@ -451,13 +455,32 @@ impl TryFrom<generated::ark::v1::RoundFinalizationEvent> for RoundFinalizationEv
             base64::engine::GeneralPurposeConfig::new(),
         );
 
-        let vtxo_tree = value.vtxo_tree.map(|tree| tree.try_into()).transpose()?;
+        let vtxo_tree = value.vtxo_tree.unwrap_or_default().try_into()?;
 
         let round_tx = base64.decode(&value.round_tx).map_err(Error::conversion)?;
 
         let round_tx = Psbt::deserialize(&round_tx).map_err(Error::conversion)?;
 
-        let connector_tree = value.connectors.map(Tree::try_from).transpose()?;
+        let connector_tree = TxTree::try_from(value.connectors.unwrap_or_default())?;
+
+        let connectors_index = value
+            .connectors_index
+            .iter()
+            .map(|(key, value)| {
+                let key = {
+                    let parts = key.split(':').collect::<Vec<_>>();
+
+                    let txid = parts[0].parse().map_err(Error::conversion)?;
+                    let vout = parts[1].parse().map_err(Error::conversion)?;
+
+                    OutPoint { txid, vout }
+                };
+
+                let value = value.clone().try_into()?;
+
+                Ok((key, value))
+            })
+            .collect::<Result<HashMap<OutPoint, OutPoint>, Error>>()?;
 
         Ok(RoundFinalizationEvent {
             id: value.id,
@@ -465,6 +488,7 @@ impl TryFrom<generated::ark::v1::RoundFinalizationEvent> for RoundFinalizationEv
             vtxo_tree,
             connector_tree,
             min_relay_fee_rate: value.min_relay_fee_rate,
+            connectors_index,
         })
     }
 }
@@ -579,7 +603,7 @@ impl TryFrom<generated::ark::v1::Round> for Round {
             Psbt::deserialize(&psbt).map_err(Error::conversion)?
         };
 
-        let vtxo_tree = value.vtxo_tree.map(|tree| tree.try_into()).transpose()?;
+        let vtxo_tree = value.vtxo_tree.unwrap_or_default().try_into()?;
 
         let forfeit_txs = value
             .forfeit_txs
@@ -591,7 +615,7 @@ impl TryFrom<generated::ark::v1::Round> for Round {
             })
             .collect::<Result<Vec<_>, Error>>()?;
 
-        let connector_tree = value.connectors.map(Tree::try_from).transpose()?;
+        let connector_tree = TxTree::try_from(value.connectors.unwrap_or_default())?;
 
         Ok(Round {
             id: value.id,
