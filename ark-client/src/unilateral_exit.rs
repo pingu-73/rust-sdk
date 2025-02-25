@@ -18,7 +18,6 @@ use bitcoin::TxOut;
 use bitcoin::Txid;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::time::Duration;
 
 // TODO: We should not _need_ to connect to the Ark server to perform unilateral exit. Currently we
 // do talk to the Ark server for simplicity.
@@ -37,22 +36,18 @@ where
             .flat_map(|(vtxo_outpoints, _)| {
                 vtxo_outpoints
                     .into_iter()
-                    .map(|vtxo_outpoint| {
-                        let outpoint = vtxo_outpoint.outpoint.expect("outpoint");
-
-                        match vtxo_outpoint.redeem_tx {
-                            Some(redeem_transaction) => {
-                                unilateral_exit::VtxoProvenance::new_unconfirmed(
-                                    outpoint,
-                                    vtxo_outpoint.round_txid,
-                                    redeem_transaction,
-                                )
-                            }
-                            None => unilateral_exit::VtxoProvenance::new(
-                                outpoint,
+                    .map(|vtxo_outpoint| match vtxo_outpoint.redeem_tx {
+                        Some(redeem_transaction) => {
+                            unilateral_exit::VtxoProvenance::new_unconfirmed(
+                                vtxo_outpoint.outpoint,
                                 vtxo_outpoint.round_txid,
-                            ),
+                                redeem_transaction,
+                            )
                         }
+                        None => unilateral_exit::VtxoProvenance::new(
+                            vtxo_outpoint.outpoint,
+                            vtxo_outpoint.round_txid,
+                        ),
                     })
                     .collect::<Vec<_>>()
             })
@@ -90,7 +85,7 @@ where
                     .retry(ExponentialBuilder::default().with_max_times(5))
                     .sleep(sleep)
                     // TODO: Use `when` to only retry certain errors.
-                    .notify(|err: &Error, dur: Duration| {
+                    .notify(|err: &Error, dur: std::time::Duration| {
                         tracing::warn!(
                             "Retrying broadcasting VTXO transaction {txid} after {dur:?}. Error: {err}",
                         );

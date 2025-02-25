@@ -11,6 +11,7 @@ mod boarding_output;
 mod conversions;
 mod error;
 mod forfeit_fee;
+mod history;
 mod internal_node;
 mod script;
 
@@ -19,6 +20,9 @@ pub use boarding_output::BoardingOutput;
 pub use default_vtxo::DefaultVtxo;
 pub use error::Error;
 pub use error::ErrorContext;
+pub use history::generate_incoming_vtxo_transaction_history;
+pub use history::generate_outgoing_vtxo_transaction_history;
+pub use history::ArkTransaction;
 pub use script::extract_sequence_from_csv_sig_script;
 
 pub const UNSPENDABLE_KEY: &str =

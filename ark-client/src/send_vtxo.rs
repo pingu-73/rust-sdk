@@ -27,7 +27,7 @@ where
             .iter()
             .flat_map(|(vtxos, _)| vtxos.clone())
             .map(|vtxo| ark_core::coin_select::VtxoOutPoint {
-                outpoint: vtxo.outpoint.expect("outpoint"),
+                outpoint: vtxo.outpoint,
                 expire_at: vtxo.expire_at,
                 amount: vtxo.amount,
             })
@@ -51,11 +51,7 @@ where
                     .find_map(|(vtxo_outpoints, vtxo)| {
                         vtxo_outpoints
                             .iter()
-                            .any(|v| {
-                                v.outpoint
-                                    .map(|o| o == vtxo_outpoint.outpoint)
-                                    .unwrap_or(false)
-                            })
+                            .any(|v| v.outpoint == vtxo_outpoint.outpoint)
                             .then_some(vtxo)
                     })
                     .expect("to find matching default VTXO");

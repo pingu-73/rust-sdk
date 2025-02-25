@@ -118,6 +118,8 @@ impl Client {
         let inputs = inputs
             .iter()
             .map(|input| {
+                let outpoint = input.outpoint();
+
                 let scripts = input
                     .tapscripts()
                     .iter()
@@ -125,9 +127,9 @@ impl Client {
                     .collect();
 
                 Input {
-                    outpoint: input.outpoint().map(|out| Outpoint {
-                        txid: out.txid.to_string(),
-                        vout: out.vout,
+                    outpoint: Some(Outpoint {
+                        txid: outpoint.txid.to_string(),
+                        vout: outpoint.vout,
                     }),
                     taproot_tree: Some(TaprootTree::Tapscripts(Tapscripts { scripts })),
                 }

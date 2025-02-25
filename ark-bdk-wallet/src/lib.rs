@@ -23,6 +23,7 @@ use bitcoin::FeeRate;
 use bitcoin::Network;
 use bitcoin::Psbt;
 use bitcoin::XOnlyPublicKey;
+use jiff::Timestamp;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::sync::Arc;
@@ -113,10 +114,10 @@ where
                 }
             });
 
-        let now = std::time::UNIX_EPOCH
-            .elapsed()
-            .map_err(Error::wallet)?
-            .as_secs();
+        let now: std::time::Duration = Timestamp::now()
+            .as_duration()
+            .try_into()
+            .map_err(Error::wallet)?;
 
         // TODO: Use smarter constants or make it configurable.
         let update = self
@@ -129,7 +130,7 @@ where
         self.inner
             .write()
             .expect("write lock")
-            .apply_update_at(update, now)
+            .apply_update_at(update, now.as_secs())
             .map_err(Error::wallet)?;
 
         Ok(())

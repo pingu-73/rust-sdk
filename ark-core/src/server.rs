@@ -11,20 +11,20 @@ use bitcoin::Txid;
 
 #[derive(Clone, Debug)]
 pub struct RoundInput {
-    outpoint: Option<OutPoint>,
+    outpoint: OutPoint,
     /// All the scripts hidden in the leaves of the Taproot tree for this input.
     tapscripts: Vec<ScriptBuf>,
 }
 
 impl RoundInput {
-    pub fn new(outpoint: Option<OutPoint>, tapscripts: Vec<ScriptBuf>) -> Self {
+    pub fn new(outpoint: OutPoint, tapscripts: Vec<ScriptBuf>) -> Self {
         Self {
             outpoint,
             tapscripts,
         }
     }
 
-    pub fn outpoint(&self) -> Option<OutPoint> {
+    pub fn outpoint(&self) -> OutPoint {
         self.outpoint
     }
 
@@ -109,14 +109,15 @@ pub struct Round {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct VtxoOutPoint {
-    // TODO: Is this supposed to be an `Option`?
-    pub outpoint: Option<OutPoint>,
+    pub outpoint: OutPoint,
     pub spent: bool,
     pub round_txid: Txid,
-    pub spent_by: String,
+    pub spent_by: Option<Txid>,
     pub expire_at: i64,
     pub swept: bool,
     pub is_pending: bool,
+    /// The redeem transaction which has this [`VtxoOutPoint`] as an output. The txid matches the
+    /// TXID of the `outpoint` field.
     pub redeem_tx: Option<Psbt>,
     pub amount: Amount,
     pub pubkey: String,

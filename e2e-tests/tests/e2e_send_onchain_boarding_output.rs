@@ -26,10 +26,10 @@ pub async fn send_onchain_boarding_output() {
 
     let alice = set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
 
-    let alice_boarding_output = alice.get_boarding_output().unwrap();
+    let alice_boarding_address = alice.get_boarding_address().unwrap();
 
     nigiri
-        .faucet_fund(alice_boarding_output.address(), Amount::ONE_BTC)
+        .faucet_fund(&alice_boarding_address, Amount::ONE_BTC)
         .await;
 
     let (tx, prevouts) = alice

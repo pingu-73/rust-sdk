@@ -6,7 +6,8 @@ use crate::Error;
 use crate::ExplorerUtxo;
 use ark_core::unilateral_exit;
 use bitcoin::Amount;
-use std::time::Duration;
+use jiff::SignedDuration;
+use jiff::Timestamp;
 
 /// Select boarding outputs and VTXOs to be used as inputs in on-chain transactions, exiting the Ark
 /// ecosystem.
@@ -34,9 +35,7 @@ where
 {
     let boarding_outputs = client.inner.wallet.get_boarding_outputs()?;
 
-    let now = std::time::UNIX_EPOCH
-        .elapsed()
-        .map_err(Error::coin_select)?;
+    let now = Timestamp::now();
 
     let mut selected_boarding_outputs = Vec::new();
     let mut selected_amount = Amount::ZERO;
@@ -57,10 +56,16 @@ where
                 outpoint,
                 amount,
                 confirmation_blocktime: Some(confirmation_blocktime),
+                is_spent: false,
             } = o
             {
-                let spendable_at = Duration::from_secs(*confirmation_blocktime)
-                    + boarding_output.exit_delay_duration();
+                let exit_delay_duration: SignedDuration = boarding_output
+                    .exit_delay_duration()
+                    .try_into()
+                    .map_err(Error::ad_hoc)?;
+                let spendable_at = Timestamp::new(*confirmation_blocktime as i64, 0)
+                    .map_err(Error::ad_hoc)?
+                    + exit_delay_duration;
 
                 // For each confirmed outpoint, check if they can already be spent unilaterally
                 // using the exit path.
@@ -93,13 +98,14 @@ where
                 outpoint,
                 amount,
                 confirmation_blocktime: Some(confirmation_blocktime),
+                is_spent: false,
             } = o
             {
                 // For each confirmed outpoint, check if they can already be spent unilaterally
                 // using the exit path.
                 if vtxo.can_be_claimed_unilaterally_by_owner(
-                    now,
-                    Duration::from_secs(*confirmation_blocktime),
+                    now.as_duration().try_into().map_err(Error::ad_hoc)?,
+                    std::time::Duration::from_secs(*confirmation_blocktime),
                 ) {
                     tracing::debug!(?outpoint, %amount, ?vtxo, "Selected VTXO");
 
