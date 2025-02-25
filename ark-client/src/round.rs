@@ -391,7 +391,7 @@ where
                         ))?;
 
                         let partial_sig_tree = sign_vtxo_tree(
-                            server_info.round_lifetime,
+                            server_info.vtxo_tree_expiry,
                             ark_server_pk,
                             &ephemeral_kp,
                             vtxo_tree,
@@ -421,7 +421,7 @@ where
                         let signed_forfeit_psbts = create_and_sign_forfeit_txs(
                             self.kp(),
                             vtxo_inputs.as_slice(),
-                            e.connectors,
+                            e.connector_tree,
                             e.min_relay_fee_rate,
                             &server_info.forfeit_address,
                             server_info.dust,

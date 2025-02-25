@@ -103,7 +103,7 @@ pub struct Round {
     pub round_tx: Psbt,
     pub vtxo_tree: Option<Tree>,
     pub forfeit_txs: Vec<Psbt>,
-    pub connectors: Vec<Psbt>,
+    pub connector_tree: Option<Tree>,
     pub stage: i32,
 }
 
@@ -127,7 +127,7 @@ pub struct VtxoOutPoint {
 #[derive(Clone, Debug)]
 pub struct Info {
     pub pk: PublicKey,
-    pub round_lifetime: bitcoin::Sequence,
+    pub vtxo_tree_expiry: bitcoin::Sequence,
     pub unilateral_exit_delay: bitcoin::Sequence,
     pub round_interval: i64,
     pub network: Network,
@@ -148,7 +148,7 @@ pub struct RoundFinalizationEvent {
     pub id: String,
     pub round_tx: Psbt,
     pub vtxo_tree: Option<Tree>,
-    pub connectors: Vec<Psbt>,
+    pub connector_tree: Option<Tree>,
     pub min_relay_fee_rate: i64,
 }
 
@@ -194,13 +194,13 @@ pub enum TransactionEvent {
 
 pub struct RedeemTransaction {
     pub txid: Txid,
-    pub spent_vtxos: Vec<OutPoint>,
+    pub spent_vtxos: Vec<VtxoOutPoint>,
     pub spendable_vtxos: Vec<VtxoOutPoint>,
 }
 
 pub struct RoundTransaction {
     pub txid: Txid,
-    pub spent_vtxos: Vec<OutPoint>,
+    pub spent_vtxos: Vec<VtxoOutPoint>,
     pub spendable_vtxos: Vec<VtxoOutPoint>,
     pub claimed_boarding_utxos: Vec<OutPoint>,
 }

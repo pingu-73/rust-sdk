@@ -1,5 +1,6 @@
 use crate::generated;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
+use crate::generated::ark::v1::explorer_service_client::ExplorerServiceClient;
 use crate::generated::ark::v1::input::TaprootTree;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetInfoRequest;
@@ -53,25 +54,34 @@ use std::str::FromStr;
 #[derive(Debug, Clone)]
 pub struct Client {
     url: String,
-    inner: Option<ArkServiceClient<tonic::transport::Channel>>,
+    ark_client: Option<ArkServiceClient<tonic::transport::Channel>>,
+    explorer_client: Option<ExplorerServiceClient<tonic::transport::Channel>>,
 }
 
 impl Client {
     pub fn new(url: String) -> Self {
-        Self { url, inner: None }
+        Self {
+            url,
+            ark_client: None,
+            explorer_client: None,
+        }
     }
 
     pub async fn connect(&mut self) -> Result<(), Error> {
-        let client = ArkServiceClient::connect(self.url.clone())
+        let ark_service_client = ArkServiceClient::connect(self.url.clone())
+            .await
+            .map_err(Error::connect)?;
+        let explorer_client = ExplorerServiceClient::connect(self.url.clone())
             .await
             .map_err(Error::connect)?;
 
-        self.inner = Some(client);
+        self.ark_client = Some(ark_service_client);
+        self.explorer_client = Some(explorer_client);
         Ok(())
     }
 
     pub async fn get_info(&mut self) -> Result<Info, Error> {
-        let mut client = self.inner_client()?;
+        let mut client = self.inner_ark_client()?;
 
         let response = client
             .get_info(GetInfoRequest {})
@@ -84,7 +94,7 @@ impl Client {
     pub async fn list_vtxos(&self, address: &ArkAddress) -> Result<ListVtxo, Error> {
         let address = address.encode();
 
-        let mut client = self.inner_client()?;
+        let mut client = self.inner_explorer_client()?;
 
         let response = client
             .list_vtxos(ListVtxosRequest { address })
@@ -110,10 +120,11 @@ impl Client {
 
     pub async fn register_inputs_for_next_round(
         &self,
-        ephemeral_key: PublicKey,
+        // TODO: delete or use
+        _ephemeral_key: PublicKey,
         inputs: &[RoundInput],
     ) -> Result<String, Error> {
-        let mut client = self.inner_client()?;
+        let mut client = self.inner_ark_client()?;
 
         let inputs = inputs
             .iter()
@@ -139,7 +150,6 @@ impl Client {
         let response = client
             .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
                 inputs,
-                ephemeral_pubkey: Some(ephemeral_key.to_string()),
                 notes: Vec::new(),
             })
             .await
@@ -154,7 +164,7 @@ impl Client {
         request_id: String,
         outpouts: &[RoundOutput],
     ) -> Result<(), Error> {
-        let mut client = self.inner_client()?;
+        let mut client = self.inner_ark_client()?;
 
         let outputs = outpouts
             .iter()
@@ -164,10 +174,14 @@ impl Client {
             })
             .collect();
 
+        // TODO: implement me
+        let musig2 = None;
+
         client
             .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
                 request_id,
                 outputs,
+                musig2,
             })
             .await
             .map_err(Error::request)?;
@@ -176,7 +190,7 @@ impl Client {
     }
 
     pub async fn submit_redeem_transaction(&self, redeem_psbt: Psbt) -> Result<Psbt, Error> {
-        let mut client = self.inner_client()?;
+        let mut client = self.inner_ark_client()?;
 
         let base64 = base64::engine::GeneralPurpose::new(
             &base64::alphabet::STANDARD,
@@ -199,7 +213,7 @@ impl Client {
     }
 
     pub async fn ping(&self, request_id: String) -> Result<(), Error> {
-        let mut client = self.inner_client()?;
+        let mut client = self.inner_ark_client()?;
 
         client
             .ping(PingRequest { request_id })
@@ -215,7 +229,7 @@ impl Client {
         ephemeral_pubkey: PublicKey,
         pub_nonce_tree: Vec<Vec<zkp::MusigPubNonce>>,
     ) -> Result<(), Error> {
-        let mut client = self.inner_client()?;
+        let mut client = self.inner_ark_client()?;
 
         let nonce_tree = tree::encode_tree(pub_nonce_tree).map_err(Error::conversion)?;
 
@@ -237,7 +251,7 @@ impl Client {
         ephemeral_pubkey: PublicKey,
         partial_sig_tree: Vec<Vec<zkp::MusigPartialSignature>>,
     ) -> Result<(), Error> {
-        let mut client = self.inner_client()?;
+        let mut client = self.inner_ark_client()?;
 
         let tree_signatures = tree::encode_tree(partial_sig_tree).map_err(Error::conversion)?;
 
@@ -258,7 +272,7 @@ impl Client {
         signed_forfeit_txs: Vec<Psbt>,
         signed_round_psbt: Psbt,
     ) -> Result<(), Error> {
-        let mut client = self.inner_client()?;
+        let mut client = self.inner_ark_client()?;
 
         let base64 = base64::engine::GeneralPurpose::new(
             &base64::alphabet::STANDARD,
@@ -282,7 +296,7 @@ impl Client {
     pub async fn get_event_stream(
         &self,
     ) -> Result<impl Stream<Item = Result<RoundStreamEvent, Error>> + Unpin, Error> {
-        let mut client = self.inner_client()?;
+        let mut client = self.inner_ark_client()?;
 
         let response = client
             .get_event_stream(GetEventStreamRequest {})
@@ -317,7 +331,7 @@ impl Client {
     pub async fn get_tx_stream(
         &self,
     ) -> Result<impl Stream<Item = Result<TransactionEvent, Error>> + Unpin, Error> {
-        let mut client = self.inner_client()?;
+        let mut client = self.inner_ark_client()?;
 
         let response = client
             .get_transactions_stream(GetTransactionsStreamRequest {})
@@ -351,7 +365,7 @@ impl Client {
     }
 
     pub async fn get_round(&self, round_txid: String) -> Result<Option<Round>, Error> {
-        let mut client = self.inner_client()?;
+        let mut client = self.inner_explorer_client()?;
 
         let response = client
             .get_round(GetRoundRequest { txid: round_txid })
@@ -364,9 +378,14 @@ impl Client {
         Ok(round)
     }
 
-    fn inner_client(&self) -> Result<ArkServiceClient<tonic::transport::Channel>, Error> {
+    fn inner_ark_client(&self) -> Result<ArkServiceClient<tonic::transport::Channel>, Error> {
         // Cloning an `ArkServiceClient<Channel>` is cheap.
-        self.inner.clone().ok_or(Error::not_connected())
+        self.ark_client.clone().ok_or(Error::not_connected())
+    }
+    fn inner_explorer_client(
+        &self,
+    ) -> Result<ExplorerServiceClient<tonic::transport::Channel>, Error> {
+        self.explorer_client.clone().ok_or(Error::not_connected())
     }
 }
 
@@ -438,21 +457,13 @@ impl TryFrom<generated::ark::v1::RoundFinalizationEvent> for RoundFinalizationEv
 
         let round_tx = Psbt::deserialize(&round_tx).map_err(Error::conversion)?;
 
-        let connectors = value
-            .connectors
-            .into_iter()
-            .map(|t| {
-                let psbt = base64.decode(&t).map_err(Error::conversion)?;
-                let psbt = Psbt::deserialize(&psbt).map_err(Error::conversion)?;
-                Ok(psbt)
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
+        let connector_tree = value.connectors.map(Tree::try_from).transpose()?;
 
         Ok(RoundFinalizationEvent {
             id: value.id,
             round_tx,
             vtxo_tree,
-            connectors,
+            connector_tree,
             min_relay_fee_rate: value.min_relay_fee_rate,
         })
     }
@@ -580,15 +591,7 @@ impl TryFrom<generated::ark::v1::Round> for Round {
             })
             .collect::<Result<Vec<_>, Error>>()?;
 
-        let connectors = value
-            .connectors
-            .into_iter()
-            .map(|t| {
-                let psbt = base64.decode(&t).map_err(Error::conversion)?;
-                let psbt = Psbt::deserialize(&psbt).map_err(Error::conversion)?;
-                Ok(psbt)
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
+        let connector_tree = value.connectors.map(Tree::try_from).transpose()?;
 
         Ok(Round {
             id: value.id,
@@ -597,7 +600,7 @@ impl TryFrom<generated::ark::v1::Round> for Round {
             round_tx,
             vtxo_tree,
             forfeit_txs,
-            connectors,
+            connector_tree,
             stage: value.stage,
         })
     }
@@ -626,8 +629,8 @@ impl TryFrom<generated::ark::v1::RoundTransaction> for RoundTransaction {
     fn try_from(value: generated::ark::v1::RoundTransaction) -> Result<Self, Self::Error> {
         let spent_vtxos = value
             .spent_vtxos
-            .into_iter()
-            .map(OutPoint::try_from)
+            .iter()
+            .map(VtxoOutPoint::try_from)
             .collect::<Result<Vec<_>, _>>()?;
 
         let claimed_boarding_utxos = value
@@ -657,8 +660,8 @@ impl TryFrom<generated::ark::v1::RedeemTransaction> for RedeemTransaction {
     fn try_from(value: generated::ark::v1::RedeemTransaction) -> Result<Self, Self::Error> {
         let spent_vtxos = value
             .spent_vtxos
-            .into_iter()
-            .map(OutPoint::try_from)
+            .iter()
+            .map(VtxoOutPoint::try_from)
             .collect::<Result<Vec<_>, _>>()?;
 
         let spendable_vtxos = value

@@ -521,7 +521,7 @@ async fn settle(
     tracing::info!(round_id, "Round combined nonces generated");
 
     let partial_sig_tree = sign_vtxo_tree(
-        server_info.round_lifetime,
+        server_info.vtxo_tree_expiry,
         server_info.pk.x_only_public_key().0,
         &ephemeral_kp,
         &unsigned_vtxo_tree,
@@ -558,7 +558,7 @@ async fn settle(
     let signed_forfeit_psbts = create_and_sign_forfeit_txs(
         &keypair,
         vtxo_inputs.as_slice(),
-        round_finalization_event.connectors,
+        round_finalization_event.connector_tree,
         round_finalization_event.min_relay_fee_rate,
         &server_info.forfeit_address,
         server_info.dust,

@@ -14,7 +14,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for server::Info {
     fn try_from(value: generated::ark::v1::GetInfoResponse) -> Result<Self, Self::Error> {
         let pk = value.pubkey.parse().map_err(Error::conversion)?;
 
-        let round_lifetime = bitcoin::Sequence::from_seconds_ceil(value.round_lifetime as u32)
+        let vtxo_tree_expiry = bitcoin::Sequence::from_seconds_ceil(value.vtxo_tree_expiry as u32)
             .map_err(Error::conversion)?;
 
         let unilateral_exit_delay =
@@ -31,7 +31,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for server::Info {
 
         Ok(Self {
             pk,
-            round_lifetime,
+            vtxo_tree_expiry,
             unilateral_exit_delay,
             round_interval: value.round_interval,
             network,
