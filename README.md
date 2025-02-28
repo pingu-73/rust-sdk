@@ -209,20 +209,20 @@ cargo install just
 
 For running e2e tests locally you will need to run bitcoind, esplora, and an ark server.
 
-1. To quickly fire up bitcoind we make use of [Nigiri](https://nigiri.vulpem.com/).
+To quickly fire up bitcoind we make use of [Nigiri](https://nigiri.vulpem.com/).
 
 ```bash
 curl https://getnigiri.vulpem.com | bash
 ```
 
-2. We build and run ark server from source, we have a few convenience methods:
+We build and run ark server from source, we have a few convenience methods:
 
 ```bash
 # replace <tag> with a git tag or version, e.g. 0.4.2
 just arkd-checkout <tag>
 ```
 
-3. Build and run arkd (note, you will need to have golang installed on your machine). Please refer to [ark's readme](https://github.com/ark-network/ark/) for system requirements.
+Build and run arkd (note, you will need to have golang installed on your machine). Please refer to [ark's readme](https://github.com/ark-network/ark/) for system requirements.
 
 ```bash
 # Note: the default round interval of ark server might be a bit too fast, we provide a simple patch function to change the round interval to 30 seconds
