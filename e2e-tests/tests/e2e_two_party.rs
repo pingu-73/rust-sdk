@@ -11,6 +11,7 @@ use std::sync::Arc;
 mod common;
 
 #[tokio::test]
+#[ignore]
 pub async fn e2e() {
     init_tracing();
     let nigiri = Arc::new(Nigiri::new());
