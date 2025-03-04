@@ -442,7 +442,7 @@ async fn settle(
         return Ok(None);
     }
 
-    let ephemeral_kp = Keypair::new(&secp, &mut rng);
+    let cosigner_kp = Keypair::new(&secp, &mut rng);
 
     let round_inputs = {
         let boarding_inputs = boarding_outputs
@@ -461,7 +461,7 @@ async fn settle(
     };
 
     let payment_id = grpc_client
-        .register_inputs_for_next_round(ephemeral_kp.public_key(), &round_inputs)
+        .register_inputs_for_next_round(&round_inputs)
         .await?;
 
     tracing::info!(
@@ -474,7 +474,12 @@ async fn settle(
 
     let round_outputs = vec![RoundOutput::new_virtual(to_address, spendable_amount)];
     grpc_client
-        .register_outputs_for_next_round(payment_id.clone(), &round_outputs)
+        .register_outputs_for_next_round(
+            payment_id.clone(),
+            &round_outputs,
+            &[cosigner_kp.public_key()],
+            false,
+        )
         .await?;
 
     tracing::info!(
@@ -499,12 +504,12 @@ async fn settle(
         .unsigned_vtxo_tree
         .expect("to have an unsigned VTXO tree");
 
-    let nonce_tree = generate_nonce_tree(&mut rng, &unsigned_vtxo_tree, ephemeral_kp.public_key())?;
+    let nonce_tree = generate_nonce_tree(&mut rng, &unsigned_vtxo_tree, cosigner_kp.public_key())?;
 
     grpc_client
         .submit_tree_nonces(
-            round_id,
-            ephemeral_kp.public_key(),
+            &round_id,
+            cosigner_kp.public_key(),
             nonce_tree.to_pub_nonce_tree().into_inner(),
         )
         .await?;
@@ -521,20 +526,19 @@ async fn settle(
     tracing::info!(round_id, "Round combined nonces generated");
 
     let partial_sig_tree = sign_vtxo_tree(
-        server_info.round_lifetime,
+        server_info.vtxo_tree_expiry,
         server_info.pk.x_only_public_key().0,
-        &ephemeral_kp,
+        &cosigner_kp,
         &unsigned_vtxo_tree,
         &round_signing_event.unsigned_round_tx,
-        round_signing_event.cosigners_pubkeys,
         nonce_tree,
-        agg_pub_nonce_tree.into(),
+        &agg_pub_nonce_tree.into(),
     )?;
 
     grpc_client
         .submit_tree_signatures(
-            round_id,
-            ephemeral_kp.public_key(),
+            &round_id,
+            cosigner_kp.public_key(),
             partial_sig_tree.into_inner(),
         )
         .await?;
@@ -558,7 +562,8 @@ async fn settle(
     let signed_forfeit_psbts = create_and_sign_forfeit_txs(
         &keypair,
         vtxo_inputs.as_slice(),
-        round_finalization_event.connectors,
+        round_finalization_event.connector_tree,
+        &round_finalization_event.connectors_index,
         round_finalization_event.min_relay_fee_rate,
         &server_info.forfeit_address,
         server_info.dust,

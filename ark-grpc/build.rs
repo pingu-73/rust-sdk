@@ -15,9 +15,11 @@ fn generate_protos() -> std::io::Result<()> {
         .build_transport(true)
         .compile_protos(
             &[
-                "proto/v1/admin.proto",
-                "proto/v1/service.proto",
-                "proto/v1/wallet.proto",
+                "proto/ark/v1/admin.proto",
+                "proto/ark/v1/service.proto",
+                "proto/ark/v1/wallet.proto",
+                "proto/ark/v1/explorer.proto",
+                "proto/ark/v1/types.proto",
             ],
             &["proto"],
         )?;

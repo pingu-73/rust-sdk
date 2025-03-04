@@ -8,6 +8,7 @@ use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::ScriptBuf;
 use bitcoin::Txid;
+use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct RoundInput {
@@ -79,17 +80,46 @@ impl RoundOutputAddress {
 }
 
 #[derive(Debug, Clone)]
-pub struct Tree {
-    pub levels: Vec<TreeLevel>,
+pub struct TxTree {
+    pub levels: Vec<TxTreeLevel>,
+}
+
+impl TxTree {
+    pub fn leaves_wrong(&self) -> Vec<TxTreeNode> {
+        self.levels
+            .last()
+            .map(|l| &l.nodes)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn leaves(&self) -> Vec<TxTreeNode> {
+        let mut leaves = self
+            .levels
+            .last()
+            .map(|l| &l.nodes)
+            .unwrap_or(&Vec::new())
+            .clone(); // Start with last level's nodes
+
+        for level in &self.levels[..self.levels.len().saturating_sub(1)] {
+            // Iterate over all levels except the last
+            for node in level.nodes.iter() {
+                if node.tx.outputs.len() == 1 {
+                    leaves.push(node.clone()); // Assuming Node implements Clone
+                }
+            }
+        }
+        leaves
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct TreeLevel {
-    pub nodes: Vec<Node>,
+pub struct TxTreeLevel {
+    pub nodes: Vec<TxTreeNode>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Node {
+pub struct TxTreeNode {
     pub txid: Txid,
     pub tx: Psbt,
     pub parent_txid: Txid,
@@ -101,9 +131,9 @@ pub struct Round {
     pub start: i64,
     pub end: i64,
     pub round_tx: Psbt,
-    pub vtxo_tree: Option<Tree>,
+    pub vtxo_tree: TxTree,
     pub forfeit_txs: Vec<Psbt>,
-    pub connectors: Vec<Psbt>,
+    pub connector_tree: TxTree,
     pub stage: i32,
 }
 
@@ -127,7 +157,7 @@ pub struct VtxoOutPoint {
 #[derive(Clone, Debug)]
 pub struct Info {
     pub pk: PublicKey,
-    pub round_lifetime: bitcoin::Sequence,
+    pub vtxo_tree_expiry: bitcoin::Sequence,
     pub unilateral_exit_delay: bitcoin::Sequence,
     pub round_interval: i64,
     pub network: Network,
@@ -147,8 +177,10 @@ pub struct ListVtxo {
 pub struct RoundFinalizationEvent {
     pub id: String,
     pub round_tx: Psbt,
-    pub vtxo_tree: Option<Tree>,
-    pub connectors: Vec<Psbt>,
+    pub vtxo_tree: TxTree,
+    pub connector_tree: TxTree,
+    /// The key is the VTXO outpoint; the value is the corresponding connector outpoint.
+    pub connectors_index: HashMap<OutPoint, OutPoint>,
     pub min_relay_fee_rate: i64,
 }
 
@@ -168,14 +200,14 @@ pub struct RoundFailedEvent {
 pub struct RoundSigningEvent {
     pub id: String,
     pub cosigners_pubkeys: Vec<PublicKey>,
-    pub unsigned_vtxo_tree: Option<Tree>,
+    pub unsigned_vtxo_tree: Option<TxTree>,
     pub unsigned_round_tx: Psbt,
 }
 
 #[derive(Debug, Clone)]
 pub struct RoundSigningNoncesGeneratedEvent {
     pub id: String,
-    pub tree_nonces: Vec<Vec<zkp::MusigPubNonce>>,
+    pub tree_nonces: Vec<Vec<Option<zkp::MusigPubNonce>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,13 +226,13 @@ pub enum TransactionEvent {
 
 pub struct RedeemTransaction {
     pub txid: Txid,
-    pub spent_vtxos: Vec<OutPoint>,
+    pub spent_vtxos: Vec<VtxoOutPoint>,
     pub spendable_vtxos: Vec<VtxoOutPoint>,
 }
 
 pub struct RoundTransaction {
     pub txid: Txid,
-    pub spent_vtxos: Vec<OutPoint>,
+    pub spent_vtxos: Vec<VtxoOutPoint>,
     pub spendable_vtxos: Vec<VtxoOutPoint>,
     pub claimed_boarding_utxos: Vec<OutPoint>,
 }
