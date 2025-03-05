@@ -238,9 +238,7 @@ where
         let server_info = &self.server_info;
 
         // Generate an (ephemeral) cosigner keypair.
-        let own_cosigner_kp_1 = Keypair::new(self.secp(), rng);
-        // FIXME: We are just testing things.
-        let own_cosigner_kp_2 = Keypair::new(self.secp(), rng);
+        let own_cosigner_kp = Keypair::new(self.secp(), rng);
 
         let inputs = {
             let boarding_inputs = onchain_inputs
@@ -283,7 +281,7 @@ where
             }
         }
 
-        let own_cosigner_kps = [own_cosigner_kp_1, own_cosigner_kp_2];
+        let own_cosigner_kps = [own_cosigner_kp];
         let own_cosigner_pks = own_cosigner_kps
             .iter()
             .map(|k| k.public_key())
