@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        clarkd-version: [
+        arkd-version: [
           'v0.5.0',
           'master'
           # Add more versions as needed
@@ -18,4 +18,4 @@ jobs:
 
     uses: ./.github/workflows/e2e-core.yml
     with:
-      clarkd-version: ${{ matrix.clarkd-version }}
+      arkd-version: ${{ matrix.arkd-version }}

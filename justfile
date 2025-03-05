@@ -1,7 +1,7 @@
 set dotenv-load
 
 clarkd_url := "http://localhost:7070"
-clarkd_logs := "$PWD/clarkd.log"
+clarkd_logs := "$PWD/arkd.log"
 
 ## ------------------------
 ## Code quality functions
@@ -35,10 +35,10 @@ gen-grpc:
 ## -------------------------
 
 # Checkout ark (https://github.com/ark-network/ark) in a local directory
-# Run with `just clarkd-checkout "master"`  to checkout and sync latest master or
-# `just clarkd-checkout "da64028e06056b115d91588fb1103021b04008ad"`to checkout a specific commit
+# Run with `just arkd-checkout "master"`  to checkout and sync latest master or
+# `just arkd-checkout "da64028e06056b115d91588fb1103021b04008ad"`to checkout a specific commit
 [positional-arguments]
-clarkd-checkout tag:
+arkd-checkout tag:
      #!/usr/bin/env bash
 
      set -euxo pipefail
@@ -98,23 +98,23 @@ clarkd-checkout tag:
          git stash pop
      fi
 
-# Set up `clarkd` so that we can run the client e2e tests against it.
-clarkd-setup:
+# Set up `arkd` so that we can run the client e2e tests against it.
+arkd-setup:
     #!/usr/bin/env bash
 
     set -euxo pipefail
 
-    echo "Running clarkd from $CLARKD_DIR"
+    echo "Running arkd from $CLARKD_DIR"
 
-    just clarkd-run
+    just arkd-run
 
-    echo "Started clarkd"
+    echo "Started arkd"
 
-    just clarkd-init
+    just arkd-init
 
-    just clarkd-fund 10
+    just arkd-fund 10
 
-clarkd-patch-makefile:
+arkd-patch-makefile:
     #!/usr/bin/env bash
     set -euxo pipefail
 
@@ -129,21 +129,21 @@ clarkd-patch-makefile:
         sed -i 's/ARK_ROUND_INTERVAL=[0-9][0-9]*/ARK_ROUND_INTERVAL=30/' Makefile
     fi
 
-# Start `clarkd` binary.
-clarkd-run:
+# Start `arkd` binary.
+arkd-run:
     #!/usr/bin/env bash
 
     set -euxo pipefail
 
     make -C $CLARKD_DIR run &> {{clarkd_logs}} &
 
-    just _wait-until-clarkd-is-ready
+    just _wait-until-arkd-is-ready
 
     echo "Clarkd started. Find the logs in {{clarkd_logs}}"
 
 
-# Build `clarkd` binary.
-clarkd-build:
+# Build `arkd` binary.
+arkd-build:
     #!/usr/bin/env bash
 
     set -euxo pipefail
@@ -154,8 +154,8 @@ clarkd-build:
 
 
 
-# Initialize `clarkd` by creating and unlocking a new wallet.
-clarkd-init:
+# Initialize `arkd` by creating and unlocking a new wallet.
+arkd-init:
     #!/usr/bin/env bash
 
     set -euxo pipefail
@@ -164,16 +164,16 @@ clarkd-init:
 
     curl -s --data-binary '{"seed": "$seed", "password": "password"}' -H "Content-Type: application/json" {{clarkd_url}}/v1/admin/wallet/create
 
-    echo "Created clarkd wallet"
+    echo "Created arkd wallet"
 
     curl -s --data-binary '{"password" : "password"}' -H "Content-Type: application/json" {{clarkd_url}}/v1/admin/wallet/unlock
 
-    echo "Unlocked clarkd wallet"
+    echo "Unlocked arkd wallet"
 
-    just _wait-until-clarkd-wallet-is-ready
+    just _wait-until-arkd-wallet-is-ready
 
-# Fund `clarkd`'s wallet with `n` utxos.
-clarkd-fund n:
+# Fund `arkd`'s wallet with `n` utxos.
+arkd-fund n:
     #!/usr/bin/env bash
 
     set -euxo pipefail
@@ -181,56 +181,56 @@ clarkd-fund n:
     for i in {1..{{n}}}; do
         address=$(curl -s {{clarkd_url}}/v1/admin/wallet/address | jq .address -r)
 
-        echo "Funding clarkd wallet (Iteration $i)"
+        echo "Funding arkd wallet (Iteration $i)"
 
         nigiri faucet "$address" 10
     done
 
-# Stop `clarkd` binary and delete logs.
-clarkd-kill:
-    pkill -9 arkd && echo "Stopped clarkd" || echo "Clarkd not running, skipped"
+# Stop `arkd` binary and delete logs.
+arkd-kill:
+    pkill -9 arkd && echo "Stopped arkd" || echo "Clarkd not running, skipped"
     [ ! -e "{{clarkd_logs}}" ] || mv -f {{clarkd_logs}} {{clarkd_logs}}.old
 
-# Wipe `clarkd` data directory.
-clarkd-wipe:
+# Wipe `arkd` data directory.
+arkd-wipe:
     @echo Clearing arkd in $CLARKD_DIR/data
     rm -rf $CLARKD_DIR/data
 
-_wait-until-clarkd-is-ready:
+_wait-until-arkd-is-ready:
     #!/usr/bin/env bash
 
-    echo "Waiting for clarkd to be ready..."
+    echo "Waiting for arkd to be ready..."
 
     for ((i=0; i<30; i+=1)); do
       status_code=$(curl -o /dev/null -s -w "%{http_code}" {{clarkd_url}}/v1/admin/wallet/seed)
 
       if [ "$status_code" -eq 200 ]; then
-        echo "clarkd is ready!"
+        echo "arkd is ready!"
         exit 0
       fi
       sleep 1
     done
 
-    echo "clarkd was not ready in time"
+    echo "arkd was not ready in time"
 
     exit 1
 
-_wait-until-clarkd-wallet-is-ready:
+_wait-until-arkd-wallet-is-ready:
     #!/usr/bin/env bash
 
-    echo "Waiting for clarkd wallet to be ready..."
+    echo "Waiting for arkd wallet to be ready..."
 
     for ((i=0; i<30; i+=1)); do
       res=$(curl -s {{clarkd_url}}/v1/admin/wallet/status)
 
       if echo "$res" | jq -e '.initialized == true and .unlocked == true and .synced == true' > /dev/null; then
-        echo "clarkd wallet is ready!"
+        echo "arkd wallet is ready!"
         exit 0
       fi
       sleep 1
     done
 
-    echo "clarkd wallet was not ready in time"
+    echo "arkd wallet was not ready in time"
 
     exit 1
 
