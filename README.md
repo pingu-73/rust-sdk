@@ -30,16 +30,16 @@ curl https://getnigiri.vulpem.com | bash
 
 ```bash
 # replace <tag> with a git tag or version, e.g. 0.4.2
-just clarkd-checkout <tag>
+just arkd-checkout <tag>
 ```
 
-3. Build and run clarkd (note, you will need to have golang installed on your machine). Please refer to [ark's readme](https://github.com/ark-network/ark/) for system requirements.
+3. Build and run arkd (note, you will need to have golang installed on your machine). Please refer to [ark's readme](https://github.com/ark-network/ark/) for system requirements.
 
 ```bash
 # Note: the default round interval of ark server might be a bit too fast, we provide a simple patch function to change the round interval to 30 seconds
-# just clarkd-patch-makefile     
+# just arkd-patch-makefile     
 # afterwards you can run
-just clarkd-setup
+just arkd-setup
 ```
 
 ### Building the Project
@@ -58,7 +58,7 @@ Use the following Just commands for common tasks:
 # Run tests
 just test
 
-# Run e2e tests (bitcoind, clarkd etc is required)
+# Run e2e tests (bitcoind, arkd etc is required)
 just e2e-tests
 
 # Format code

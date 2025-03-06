@@ -3,8 +3,8 @@ name: Core E2E Tests with Nigiri
 on:
   workflow_call:
     inputs:
-      clarkd-version:
-        description: 'Version of clarkd to test against (git tag, version, hash)'
+      arkd-version:
+        description: 'Version of arkd to test against (git tag, version, hash)'
         required: true
         type: string
 
@@ -45,7 +45,7 @@ jobs:
       - name: Upload test binaries
         uses: actions/upload-artifact@v4
         with:
-          name: test-binaries_${{ inputs.clarkd-version }}
+          name: test-binaries_${{ inputs.arkd-version }}
           path: target/debug/deps/e2e_*
           retention-days: 1
           overwrite: true
@@ -68,7 +68,7 @@ jobs:
       - name: Download test binaries
         uses: actions/download-artifact@v4
         with:
-          name: test-binaries_${{ inputs.clarkd-version }}
+          name: test-binaries_${{ inputs.arkd-version }}
           path: target/debug/deps
 
       - name: Show downloaded binaries
@@ -88,15 +88,15 @@ jobs:
           sleep 15
 
       # TODO: CI could be optimized by moving this step into the prior step and share the build binaries
-      - name: Checkout clarkd `${{ inputs.clarkd-version }}`
+      - name: Checkout arkd `${{ inputs.arkd-version }}`
         run: |
-          just clarkd-checkout ${{ inputs.clarkd-version }}
+          just arkd-checkout ${{ inputs.arkd-version }}
 
       - name: Patch makefile for longer rounds
         run: |
-          just clarkd-patch-makefile
+          just arkd-patch-makefile
 
-      - name: Set up Go for clarkd
+      - name: Set up Go for arkd
         uses: actions/setup-go@v4
         with:
           go-version: '>=1.23.1'
@@ -106,21 +106,21 @@ jobs:
           cd $CLARKD_DIR
           go work sync
 
-      - name: Build clarkd server
+      - name: Build arkd server
         run: |
-          just clarkd-build
+          just arkd-build
 
-      - name: Run clarkd server
+      - name: Run arkd server
         run: |
-          just clarkd-run
+          just arkd-run
 
-      - name: Init clarkd server
+      - name: Init arkd server
         run: |
-          just clarkd-init
+          just arkd-init
 
-      - name: Fund clarkd server
+      - name: Fund arkd server
         run: |
-          just clarkd-fund 20
+          just arkd-fund 20
           # Wait for arkd to catch up with the chain
           sleep 10
 
@@ -134,13 +134,13 @@ jobs:
         if: always()
         run: nigiri stop --delete
 
-      - name: Print clarkd logs on failure
+      - name: Print arkd logs on failure
         if: failure()
         run: |
-          if [ -f clarkd.log ]; then
-            echo "=== clarkd.log contents ==="
-            cat clarkd.log
-            echo "=== End of clarkd.log ==="
+          if [ -f arkd.log ]; then
+            echo "=== arkd.log contents ==="
+            cat arkd.log
+            echo "=== End of arkd.log ==="
           else
-            echo "clarkd.log file not found"
+            echo "arkd.log file not found"
           fi
