@@ -274,7 +274,7 @@ impl Client {
     pub async fn submit_signed_forfeit_txs(
         &self,
         signed_forfeit_txs: Vec<Psbt>,
-        signed_round_psbt: Psbt,
+        signed_round_psbt: Option<Psbt>,
     ) -> Result<(), Error> {
         let mut client = self.inner_ark_client()?;
 
@@ -289,7 +289,7 @@ impl Client {
                     .iter()
                     .map(|psbt| base64.encode(psbt.serialize()))
                     .collect(),
-                signed_round_tx: Some(base64.encode(signed_round_psbt.serialize())),
+                signed_round_tx: signed_round_psbt.map(|p| base64.encode(p.serialize())),
             })
             .await
             .map_err(Error::request)?;

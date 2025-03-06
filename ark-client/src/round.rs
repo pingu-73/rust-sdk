@@ -238,9 +238,7 @@ where
         let server_info = &self.server_info;
 
         // Generate an (ephemeral) cosigner keypair.
-        let own_cosigner_kp_1 = Keypair::new(self.secp(), rng);
-        // FIXME: We are just testing things.
-        let own_cosigner_kp_2 = Keypair::new(self.secp(), rng);
+        let own_cosigner_kp = Keypair::new(self.secp(), rng);
 
         let inputs = {
             let boarding_inputs = onchain_inputs
@@ -283,7 +281,7 @@ where
             }
         }
 
-        let own_cosigner_kps = [own_cosigner_kp_1, own_cosigner_kp_2];
+        let own_cosigner_kps = [own_cosigner_kp];
         let own_cosigner_pks = own_cosigner_kps
             .iter()
             .map(|k| k.public_key())
@@ -451,22 +449,28 @@ where
                         )
                         .map_err(Error::from)?;
 
-                        let mut round_psbt = e.round_tx;
+                        let round_psbt = if onchain_inputs.is_empty() {
+                            None
+                        } else {
+                            let mut round_psbt = e.round_tx;
 
-                        let sign_for_pk_fn = |pk: &XOnlyPublicKey,
-                                              msg: &secp256k1::Message|
-                         -> Result<
-                            schnorr::Signature,
-                            ark_core::Error,
-                        > {
-                            self.inner
-                                .wallet
-                                .sign_for_pk(pk, msg)
-                                .map_err(|e| ark_core::Error::ad_hoc(e.to_string()))
+                            let sign_for_pk_fn = |pk: &XOnlyPublicKey,
+                                                  msg: &secp256k1::Message|
+                             -> Result<
+                                schnorr::Signature,
+                                ark_core::Error,
+                            > {
+                                self.inner
+                                    .wallet
+                                    .sign_for_pk(pk, msg)
+                                    .map_err(|e| ark_core::Error::ad_hoc(e.to_string()))
+                            };
+
+                            sign_round_psbt(sign_for_pk_fn, &mut round_psbt, &onchain_inputs)
+                                .map_err(Error::from)?;
+
+                            Some(round_psbt)
                         };
-
-                        sign_round_psbt(sign_for_pk_fn, &mut round_psbt, &onchain_inputs)
-                            .map_err(Error::from)?;
 
                         network_client
                             .submit_signed_forfeit_txs(signed_forfeit_psbts, round_psbt)

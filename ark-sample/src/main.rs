@@ -569,21 +569,27 @@ async fn settle(
         server_info.dust,
     )?;
 
-    let mut round_psbt = round_finalization_event.round_tx;
-
-    let sign_for_pk_fn = |_: &XOnlyPublicKey,
-                          msg: &secp256k1::Message|
-     -> Result<schnorr::Signature, ark_core::Error> {
-        Ok(secp.sign_schnorr_no_aux_rand(msg, &keypair))
-    };
-
     let onchain_inputs = boarding_outputs
         .spendable
         .into_iter()
         .map(|(outpoint, _, boarding_output)| round::OnChainInput::new(boarding_output, outpoint))
         .collect::<Vec<_>>();
 
-    sign_round_psbt(sign_for_pk_fn, &mut round_psbt, &onchain_inputs)?;
+    let round_psbt = if round_inputs.is_empty() {
+        None
+    } else {
+        let mut round_psbt = round_finalization_event.round_tx;
+
+        let sign_for_pk_fn = |_: &XOnlyPublicKey,
+                              msg: &secp256k1::Message|
+         -> Result<schnorr::Signature, ark_core::Error> {
+            Ok(secp.sign_schnorr_no_aux_rand(msg, &keypair))
+        };
+
+        sign_round_psbt(sign_for_pk_fn, &mut round_psbt, &onchain_inputs)?;
+
+        Some(round_psbt)
+    };
 
     grpc_client
         .submit_signed_forfeit_txs(signed_forfeit_psbts, round_psbt)
