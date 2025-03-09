@@ -23,6 +23,14 @@ ark-core = "0.1" # Replace with actual version
 
 ## Usage
 
+### Examples
+
+- [`e2e_two_party`](./e2e-tests/tests/e2e_two_party.rs)
+- [`e2e_concurrent_boarding`](./e2e-tests/tests/e2e_concurrent_boarding.rs)
+- [`e2e_send_onchain_boarding_output`](./e2e-tests/tests/e2e_send_onchain_boarding_output.rs)
+- [`e2e_send_onchain_vtxo`](./e2e-tests/tests/e2e_send_onchain_vtxo.rs)
+- [`sample client`](./ark-sample/src/main.rs)
+
 ### Client Initialization
 
 ```rust
