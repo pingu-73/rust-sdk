@@ -32,6 +32,143 @@ mod utils;
 
 pub use error::Error;
 
+/// A client to interact with Ark Server
+///
+/// ## Example
+///
+/// ```rust
+/// # use std::future::Future;
+/// # use std::str::FromStr;
+/// # use ark_client::{Blockchain, Client, Error, ExplorerUtxo, SpendStatus};
+/// # use ark_client::OfflineClient;
+/// # use bitcoin::key::Keypair;
+/// # use bitcoin::secp256k1::{Message, SecretKey};
+/// # use std::sync::Arc;
+/// # use bitcoin::{Address, Amount, FeeRate, Network, Psbt, Transaction, Txid, XOnlyPublicKey};
+/// # use bitcoin::secp256k1::schnorr::Signature;
+/// # use ark_client::wallet::{Balance, BoardingWallet, OnchainWallet, Persistence};
+/// # use ark_core::BoardingOutput;
+///
+/// struct MyBlockchain {}
+/// #
+/// # impl MyBlockchain {
+/// #     pub fn new(_url: &str) -> Self { Self {}}
+/// # }
+/// #
+/// # impl Blockchain for MyBlockchain {
+/// #
+/// #     async fn find_outpoints(&self, address: &Address) -> Result<Vec<ExplorerUtxo>, Error> {
+/// #         unimplemented!("You can implement this function using your preferred client library such as esplora_client")
+/// #     }
+/// #
+/// #     async fn find_tx(&self, txid: &Txid) -> Result<Option<Transaction>, Error> {
+/// #         unimplemented!()
+/// #     }
+/// #
+/// #     async fn get_output_status(&self, txid: &Txid, vout: u32) -> Result<SpendStatus, Error> {
+/// #         unimplemented!()
+/// #     }
+/// #
+/// #     async fn broadcast(&self, tx: &Transaction) -> Result<(), Error> {
+/// #         unimplemented!()
+/// #     }
+/// # }
+///
+/// struct MyWallet {}
+///
+/// # impl OnchainWallet for MyWallet where {
+/// #
+/// #     fn get_onchain_address(&self) -> Result<Address, Error> {
+/// #         unimplemented!("You can implement this function using your preferred client library such as bdk")
+/// #     }
+/// #
+/// #     async fn sync(&self) -> Result<(), Error> {
+/// #         unimplemented!()
+/// #     }
+/// #
+/// #     fn balance(&self) -> Result<Balance, Error> {
+/// #         unimplemented!()
+/// #     }
+/// #
+/// #     fn prepare_send_to_address(&self, address: Address, amount: Amount, fee_rate: FeeRate) -> Result<Psbt, Error> {
+/// #         unimplemented!()
+/// #     }
+/// #
+/// #     fn sign(&self, psbt: &mut Psbt) -> Result<bool, Error> {
+/// #         unimplemented!()
+/// #     }
+/// # }
+/// #
+/// struct InMemoryDb {}
+///
+/// # impl Persistence for InMemoryDb {
+/// #
+/// #     fn save_boarding_output(
+/// #         &self,
+/// #         sk: SecretKey,
+/// #         boarding_output: BoardingOutput,
+/// #     ) -> Result<(), Error> {
+/// #       unimplemented!()
+/// #     }
+/// #
+/// #     fn load_boarding_outputs(&self) -> Result<Vec<BoardingOutput>, Error> {
+/// #           unimplemented!()
+/// #     }
+/// #
+/// #     fn sk_for_pk(&self, pk: &XOnlyPublicKey) -> Result<SecretKey, Error> {
+/// #         unimplemented!()
+/// #     }
+/// # }
+/// #
+/// #
+/// # impl BoardingWallet for MyWallet
+/// # where
+/// # {
+/// #     fn new_boarding_output(
+/// #         &self,
+/// #         server_pk: XOnlyPublicKey,
+/// #         exit_delay: bitcoin::Sequence,
+/// #         descriptor_template: &str,
+/// #         network: Network,
+/// #     ) -> Result<BoardingOutput, Error> {
+/// #         unimplemented!()
+/// #     }
+/// #
+/// #     fn get_boarding_outputs(&self) -> Result<Vec<BoardingOutput>, Error> {
+/// #         unimplemented!()
+/// #     }
+/// #
+/// #     fn sign_for_pk(&self, pk: &XOnlyPublicKey, msg: &Message) -> Result<Signature, Error> {
+/// #         unimplemented!()
+/// #     }
+/// # }
+/// #
+/// // Initialize the client
+/// async fn init_client() -> Result<Client<MyBlockchain, MyWallet>, ark_client::Error> {
+///     // Create a keypair for signing transactions
+///     let secp = bitcoin::key::Secp256k1::new();
+///     let secret_key = SecretKey::from_str("your_private_key_here").unwrap();
+///     let keypair = Keypair::from_secret_key(&secp, &secret_key);
+///
+///     // Initialize blockchain and wallet implementations
+///     let blockchain = Arc::new(MyBlockchain::new("https://esplora.example.com"));
+///     let wallet = Arc::new(MyWallet {});
+///
+///     // Create the offline client
+///     let offline_client = OfflineClient::new(
+///         "my-ark-client".to_string(),
+///         keypair,
+///         blockchain,
+///         wallet,
+///         "https://ark-server.example.com".to_string(),
+///     );
+///
+///     // Connect to the Ark server and get server info
+///     let client = offline_client.connect().await?;
+///
+///     Ok(client)
+/// }
+/// ```
 pub struct OfflineClient<B, W> {
     // TODO: We could introduce a generic interface so that consumers can use either GRPC or REST.
     network_client: ark_grpc::Client,
@@ -42,6 +179,9 @@ pub struct OfflineClient<B, W> {
     wallet: Arc<W>,
 }
 
+/// A client to interact with Ark server
+///
+/// See [`OfflineClient`] docs for details.
 pub struct Client<B, W> {
     inner: OfflineClient<B, W>,
     pub server_info: server::Info,
