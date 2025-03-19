@@ -1,0 +1,14 @@
+[package]
+name = "ark-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ark-client = { path = "../ark-client", optional = true }
+ark-core = { path = "../ark-core" }
+ark-grpc = { path = "../ark-grpc", optional = true }
+
+[features]
+default = []
+client = ["ark-client"]
+grpc = ["ark-grpc"]
