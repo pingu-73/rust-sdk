@@ -19,7 +19,7 @@ prost-types = "0.13.3"
 rand = "0.8"
 tokio = { version = "1.41.0", features = ["sync"] }
 tracing = "0.1.37"
-zkp = { package = "secp256k1-zkp", version = "0.10", features = ["serde", "rand-std"] }
+zkp = { package = "ark-secp256k1-zkp", version = "0.10.0", path = "../ark-rust-secp256k1-zkp", features = ["serde", "rand-std"] }
 
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 ark-grpc = { path = "../ark-grpc" }

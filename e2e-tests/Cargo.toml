@@ -22,4 +22,4 @@ tokio = { version = "1.41.0", features = ["full"] }
 tonic = "0.12.3"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "env-filter", "time", "tracing-log", "json"] }
-zkp = { package = "secp256k1-zkp", git = "https://github.com/sanket1729/rust-secp256k1-zkp.git", rev = "60e631c24588a0c9e271badd61959294848c665d", features = ["serde", "rand-std"] }
+zkp = { package = "ark-secp256k1-zkp", version = "0.10.0", path = "../ark-rust-secp256k1-zkp", features = ["serde", "rand-std"] }

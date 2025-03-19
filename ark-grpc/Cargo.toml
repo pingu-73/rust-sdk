@@ -16,7 +16,7 @@ log = "0.4"
 prost = { version = "0.13", default-features = false }
 prost-types = { version = "0.13", default-features = false }
 tonic = { version = "0.12", default-features = false, features = ["tls-native-roots", "transport", "codegen", "prost"] }
-zkp = { package = "secp256k1-zkp", version = "0.10", default-features = false, features = ["serde"] }
+zkp = { package = "ark-secp256k1-zkp", version = "0.10.0", path = "../ark-rust-secp256k1-zkp", features = ["serde"] }
 
 [target.'cfg(genproto)'.build-dependencies]
 tonic-build = { version = "0.12" }
