@@ -9,7 +9,8 @@
     "**/*.{rs,json,md,toml,dockerfile,yml,yaml}"
   ],
   "excludes": [
-    "**/target"
+    "**/target",
+    "ark-rust-secp256k1-zkp/*"
   ],
   "exec": {
     "commands": [
