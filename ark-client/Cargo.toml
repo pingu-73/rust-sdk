@@ -24,7 +24,7 @@ tracing = "0.1.37"
 zkp = { package = "ark-secp256k1-zkp", version = "0.10.0", path = "../ark-rust-secp256k1-zkp", features = ["serde", "rand-std"] }
 
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
-ark-grpc = { path = "../ark-grpc" }
+ark-grpc = { path = "../ark-grpc", version = "0.1.0" }
 backon = { version = "1", features = ["tokio-sleep"] }
 tonic = { version = "0.12", features = ["tls-native-roots"] }
 
