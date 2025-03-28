@@ -1,7 +1,9 @@
 [package]
 name = "ark-core"
+description = "Core types and utilities for Ark"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 bech32 = "0.11"

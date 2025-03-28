@@ -1,7 +1,9 @@
 [package]
 name = "ark-rs"
+description = "Collection of Rust crates designed to simplify building Bitcoin wallets with seamless support for both on-chain and off-chain transactions via the Ark protocol"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 ark-client = { path = "../ark-client", optional = true }
