@@ -6,7 +6,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
-ark-client = { path = "../ark-client", optional = true }
+ark-client = { path = "../ark-client", version = "0.1.0", optional = true }
 ark-core = { path = "../ark-core" }
 ark-grpc = { path = "../ark-grpc", optional = true }
 
