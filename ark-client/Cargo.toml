@@ -9,7 +9,7 @@ license = "MIT"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(genproto)'] }
 
 [dependencies]
-ark-core = { path = "../ark-core" }
+ark-core = { path = "../ark-core", version = "0.1.0" }
 async-stream = "0.3"
 base64 = "0.22.1"
 bech32 = "0.11"
