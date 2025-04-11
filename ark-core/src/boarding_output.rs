@@ -20,7 +20,7 @@ use bitcoin::ScriptBuf;
 use bitcoin::XOnlyPublicKey;
 use std::time::Duration;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BoardingOutput {
     server: XOnlyPublicKey,
     owner: XOnlyPublicKey,
@@ -36,10 +36,27 @@ impl BoardingOutput {
         owner: XOnlyPublicKey,
         exit_delay: bitcoin::Sequence,
         network: Network,
-    ) -> Self
+    ) -> Result<Self, Error>
     where
         C: Verification,
     {
+        // HACK: I believe the Ark server should give us a value for the boarding exit delay, now
+        // that it can diverge from the `unilateral_exit_delay` applied to VTXOs.
+        //
+        // We double the `unilateral_exit_delay` because this works against our regtest Ark server.
+        let exit_delay = exit_delay
+            .to_relative_lock_time()
+            .ok_or_else(|| Error::ad_hoc("invalid exit delay"))?;
+
+        let exit_delay = match exit_delay {
+            relative::LockTime::Blocks(blocks) => {
+                bitcoin::Sequence::from_height(blocks.value() * 2)
+            }
+            relative::LockTime::Time(time) => {
+                bitcoin::Sequence::from_512_second_intervals(time.value() * 2)
+            }
+        };
+
         let unspendable_key: PublicKey = UNSPENDABLE_KEY.parse().expect("valid key");
         let (unspendable_key, _) = unspendable_key.inner.x_only_public_key();
 
@@ -57,13 +74,13 @@ impl BoardingOutput {
         let script_pubkey = tr_script_pubkey(&spend_info);
         let address = Address::from_script(&script_pubkey, network).expect("valid script");
 
-        Self {
+        Ok(Self {
             server,
             owner,
             spend_info,
             address,
             exit_delay,
-        }
+        })
     }
 
     pub fn address(&self) -> &Address {

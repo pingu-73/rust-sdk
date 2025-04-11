@@ -189,13 +189,14 @@ where
         let sk = self.kp.secret_key();
         let (owner_pk, _) = sk.public_key(&self.secp).x_only_public_key();
 
-        let address = BoardingOutput::new(&self.secp, server_pk, owner_pk, exit_delay, network);
+        let boarding_output =
+            BoardingOutput::new(&self.secp, server_pk, owner_pk, exit_delay, network)?;
 
         self.db
-            .save_boarding_output(sk, address.clone())
+            .save_boarding_output(sk, boarding_output.clone())
             .context("Failed saving boarding output")?;
 
-        Ok(address)
+        Ok(boarding_output)
     }
 
     fn get_boarding_outputs(&self) -> Result<Vec<BoardingOutput>, Error> {

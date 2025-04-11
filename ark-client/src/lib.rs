@@ -3,7 +3,6 @@ use crate::wallet::OnchainWallet;
 use ark_core::generate_incoming_vtxo_transaction_history;
 use ark_core::generate_outgoing_vtxo_transaction_history;
 use ark_core::server;
-use ark_core::server::ListVtxo;
 use ark_core::server::Round;
 use ark_core::server::VtxoOutPoint;
 use ark_core::ArkAddress;
@@ -200,6 +199,30 @@ pub struct SpendStatus {
     pub spend_txid: Option<Txid>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ListVtxo {
+    pub spendable: Vec<(Vec<VtxoOutPoint>, Vtxo)>,
+    pub spent: Vec<(Vec<VtxoOutPoint>, Vtxo)>,
+}
+
+impl ListVtxo {
+    fn spendable_outpoints(&self) -> Vec<VtxoOutPoint> {
+        self.spendable
+            .clone()
+            .into_iter()
+            .flat_map(|(os, _)| os)
+            .collect::<Vec<_>>()
+    }
+
+    fn spent_outpoints(&self) -> Vec<VtxoOutPoint> {
+        self.spent
+            .clone()
+            .into_iter()
+            .flat_map(|(os, _)| os)
+            .collect::<Vec<_>>()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OffChainBalance {
     pending: Amount,
@@ -318,6 +341,7 @@ where
     // At the moment we are always generating the same address.
     pub fn get_boarding_address(&self) -> Result<Address, Error> {
         let server_info = &self.server_info;
+
         let boarding_output = self.inner.wallet.new_boarding_output(
             server_info.pk.x_only_public_key().0,
             server_info.unilateral_exit_delay,
@@ -341,10 +365,13 @@ where
             spent: Vec::new(),
         };
 
-        for (address, _) in addresses.into_iter() {
-            let mut list = self.network_client().list_vtxos(&address).await?;
-            vtxos.spendable.append(&mut list.spendable);
-            vtxos.spent.append(&mut list.spent);
+        for (address, vtxo) in addresses.into_iter() {
+            let list = self.network_client().list_vtxos(&address).await?;
+
+            vtxos
+                .spendable
+                .append(&mut vec![(list.spendable, vtxo.clone())]);
+            vtxos.spent.append(&mut vec![(list.spent, vtxo)]);
         }
 
         Ok(vtxos)
@@ -357,17 +384,16 @@ where
     }
 
     pub async fn spendable_vtxos(&self) -> Result<Vec<(Vec<VtxoOutPoint>, Vtxo)>, Error> {
-        let addresses = self.get_offchain_addresses()?;
-
         let now = Timestamp::now();
 
         let mut spendable = vec![];
-        for (address, vtxo) in addresses.into_iter() {
-            let vtxos = self.network_client().list_vtxos(&address).await?;
+
+        let vtxos = self.list_vtxos().await?;
+        for (virtual_tx_outpoints, vtxo) in vtxos.spendable {
             let explorer_utxos = self.blockchain().find_outpoints(vtxo.address()).await?;
 
-            let mut vtxo_outpoints = Vec::new();
-            for vtxo_outpoint in vtxos.spendable {
+            let mut spendable_outpoints = Vec::new();
+            for vtxo_outpoint in virtual_tx_outpoints {
                 match explorer_utxos
                     .iter()
                     .find(|explorer_utxo| explorer_utxo.outpoint == vtxo_outpoint.outpoint)
@@ -382,17 +408,17 @@ where
                         std::time::Duration::from_secs(*confirmation_blocktime),
                     ) =>
                     {
-                        vtxo_outpoints.push(vtxo_outpoint);
+                        spendable_outpoints.push(vtxo_outpoint);
                     }
                     // The VTXO has not been confirmed on the blockchain yet. Therefore, it
                     // cannot have expired.
                     _ => {
-                        vtxo_outpoints.push(vtxo_outpoint);
+                        spendable_outpoints.push(vtxo_outpoint);
                     }
                 }
             }
 
-            spendable.push((vtxo_outpoints, vtxo));
+            spendable.push((spendable_outpoints, vtxo));
         }
 
         Ok(spendable)
@@ -454,13 +480,15 @@ where
         let vtxos = self.list_vtxos().await?;
 
         let incoming_transactions = generate_incoming_vtxo_transaction_history(
-            &vtxos.spent,
-            &vtxos.spendable,
+            &vtxos.spent_outpoints(),
+            &vtxos.spendable_outpoints(),
             &boarding_round_transactions,
         )?;
 
-        let outgoing_transactions =
-            generate_outgoing_vtxo_transaction_history(&vtxos.spent, &vtxos.spendable)?;
+        let outgoing_transactions = generate_outgoing_vtxo_transaction_history(
+            &vtxos.spent_outpoints(),
+            &vtxos.spendable_outpoints(),
+        )?;
 
         let mut txs = [
             boarding_transactions,

@@ -8,6 +8,7 @@ use ark_core::unilateral_exit;
 use bitcoin::Amount;
 use jiff::SignedDuration;
 use jiff::Timestamp;
+use std::collections::HashSet;
 
 /// Select boarding outputs and VTXOs to be used as inputs in on-chain transactions, exiting the Ark
 /// ecosystem.
@@ -37,12 +38,12 @@ where
 
     let now = Timestamp::now();
 
-    let mut selected_boarding_outputs = Vec::new();
+    let mut selected_boarding_outputs = HashSet::new();
     let mut selected_amount = Amount::ZERO;
 
     for boarding_output in boarding_outputs.iter() {
         if target_amount <= selected_amount {
-            return Ok((selected_boarding_outputs, Vec::new()));
+            return Ok((selected_boarding_outputs.into_iter().collect(), Vec::new()));
         }
 
         let outpoints = client
@@ -72,26 +73,29 @@ where
                 if spendable_at <= now {
                     tracing::debug!(?outpoint, %amount, ?boarding_output, "Selected boarding output");
 
-                    selected_boarding_outputs.push(unilateral_exit::OnChainInput::new(
+                    if selected_boarding_outputs.insert(unilateral_exit::OnChainInput::new(
                         boarding_output.clone(),
                         *amount,
                         *outpoint,
-                    ));
-                    selected_amount += *amount;
+                    )) {
+                        selected_amount += *amount;
+                    }
                 }
             }
         }
     }
 
-    let mut selected_vtxo_outputs = Vec::new();
+    let mut selected_vtxo_outputs = HashSet::new();
 
     for (_, vtxo) in client.get_offchain_addresses()? {
         if target_amount <= selected_amount {
-            return Ok((selected_boarding_outputs, selected_vtxo_outputs));
+            return Ok((
+                selected_boarding_outputs.into_iter().collect(),
+                selected_vtxo_outputs.into_iter().collect(),
+            ));
         }
 
         let outpoints = client.blockchain().find_outpoints(vtxo.address()).await?;
-
         for o in outpoints.iter() {
             // Find outpoints for each VTXO.
             if let ExplorerUtxo {
@@ -109,7 +113,7 @@ where
                 ) {
                     tracing::debug!(?outpoint, %amount, ?vtxo, "Selected VTXO");
 
-                    selected_vtxo_outputs.push(unilateral_exit::VtxoInput::new(
+                    selected_vtxo_outputs.insert(unilateral_exit::VtxoInput::new(
                         vtxo.clone(),
                         *amount,
                         *outpoint,
@@ -126,5 +130,8 @@ where
         )));
     }
 
-    Ok((selected_boarding_outputs, selected_vtxo_outputs))
+    Ok((
+        selected_boarding_outputs.into_iter().collect(),
+        selected_vtxo_outputs.into_iter().collect(),
+    ))
 }
