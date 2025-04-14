@@ -47,10 +47,11 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
     wait_until_balance(&alice, fund_amount, Amount::ZERO).await;
 
     alice.commit_vtxos_on_chain().await.unwrap();
-    wait_until_balance(&alice, Amount::ZERO, Amount::ZERO).await;
 
     // Get one confirmation on the VTXO.
     nigiri.mine(1).await;
+
+    wait_until_balance(&alice, Amount::ZERO, Amount::ZERO).await;
 
     let alice_boarding_address = alice.get_boarding_address().unwrap();
     nigiri
