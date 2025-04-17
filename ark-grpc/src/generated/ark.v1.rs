@@ -105,6 +105,8 @@ pub struct RoundTransaction {
     pub spendable_vtxos: ::prost::alloc::vec::Vec<Vtxo>,
     #[prost(message, repeated, tag = "4")]
     pub claimed_boarding_utxos: ::prost::alloc::vec::Vec<Outpoint>,
+    #[prost(string, tag = "5")]
+    pub hex: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RedeemTransaction {
@@ -114,6 +116,8 @@ pub struct RedeemTransaction {
     pub spent_vtxos: ::prost::alloc::vec::Vec<Vtxo>,
     #[prost(message, repeated, tag = "3")]
     pub spendable_vtxos: ::prost::alloc::vec::Vec<Vtxo>,
+    #[prost(string, tag = "4")]
+    pub hex: ::prost::alloc::string::String,
 }
 /// This message is used to prove to the server that the user controls the vtxo without revealing
 /// the whole VTXO taproot tree.
@@ -1545,6 +1549,18 @@ pub struct ListVtxosResponse {
     #[prost(message, repeated, tag = "2")]
     pub spent_vtxos: ::prost::alloc::vec::Vec<Vtxo>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubscribeForAddressRequest {
+    #[prost(string, tag = "1")]
+    pub address: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubscribeForAddressResponse {
+    #[prost(message, repeated, tag = "2")]
+    pub new_vtxos: ::prost::alloc::vec::Vec<Vtxo>,
+    #[prost(message, repeated, tag = "3")]
+    pub spent_vtxos: ::prost::alloc::vec::Vec<Vtxo>,
+}
 /// Generated client implementations.
 pub mod explorer_service_client {
     #![allow(
@@ -1677,6 +1693,26 @@ pub mod explorer_service_client {
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.ExplorerService", "ListVtxos"));
             self.inner.unary(req, path, codec).await
+        }
+        pub async fn subscribe_for_address(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SubscribeForAddressRequest>,
+        ) -> std::result::Result<
+            tonic::Response<tonic::codec::Streaming<super::SubscribeForAddressResponse>>,
+            tonic::Status,
+        > {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.ExplorerService/SubscribeForAddress");
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.ExplorerService",
+                "SubscribeForAddress",
+            ));
+            self.inner.server_streaming(req, path, codec).await
         }
     }
 }

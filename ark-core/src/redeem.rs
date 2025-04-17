@@ -6,11 +6,13 @@ use crate::Error;
 use crate::ErrorContext;
 use bitcoin::absolute::LockTime;
 use bitcoin::hashes::Hash;
+use bitcoin::psbt;
 use bitcoin::secp256k1;
 use bitcoin::secp256k1::schnorr;
 use bitcoin::sighash::Prevouts;
 use bitcoin::sighash::SighashCache;
 use bitcoin::taproot;
+use bitcoin::taproot::LeafVersion;
 use bitcoin::transaction;
 use bitcoin::Amount;
 use bitcoin::FeeRate;
@@ -23,6 +25,12 @@ use bitcoin::TxIn;
 use bitcoin::TxOut;
 use bitcoin::XOnlyPublicKey;
 use std::collections::BTreeMap;
+use std::io;
+use std::io::Write;
+
+/// The byte value corresponds to the string "taptree".
+const VTXO_TAPROOT_KEY: [u8; 7] = [116, 97, 112, 116, 114, 101, 101];
+// const VTXO_TAPROOT_KEY: [u8; 7] = [97, 112, 116, 114, 101, 101, 0];
 
 /// A VTXO to be spent into an unconfirmed VTXO.
 #[derive(Debug, Clone)]
@@ -168,9 +176,56 @@ pub fn build_redeem_transaction(
         output: outputs,
     };
 
-    let unsigned_redeem_psbt = Psbt::from_unsigned_tx(unsigned_tx).map_err(Error::transaction)?;
+    let mut unsigned_redeem_psbt =
+        Psbt::from_unsigned_tx(unsigned_tx).map_err(Error::transaction)?;
+
+    for (i, vtxo_input) in vtxo_inputs.iter().enumerate() {
+        let mut bytes = Vec::new();
+
+        write_compact_size_uint(&mut bytes, vtxo_input.vtxo.tapscripts().len() as u64)
+            .map_err(Error::transaction)?;
+
+        for script in vtxo_input.vtxo.tapscripts().iter() {
+            // Write the depth (always 1). TODO: Support more depth.
+            bytes.push(1);
+
+            // TODO: Support future leaf versions.
+            bytes.push(LeafVersion::TapScript.to_consensus());
+
+            let mut script_bytes = script.to_bytes();
+
+            write_compact_size_uint(&mut bytes, script_bytes.len() as u64)
+                .map_err(Error::transaction)?;
+
+            bytes.append(&mut script_bytes);
+        }
+
+        unsigned_redeem_psbt.inputs[i].unknown.insert(
+            psbt::raw::Key {
+                type_value: u8::MAX,
+                key: VTXO_TAPROOT_KEY.to_vec(),
+            },
+            bytes,
+        );
+    }
 
     Ok(unsigned_redeem_psbt)
+}
+
+fn write_compact_size_uint<W: Write>(w: &mut W, val: u64) -> io::Result<()> {
+    if val < 253 {
+        w.write_all(&[val as u8])?;
+    } else if val < 0x10000 {
+        w.write_all(&[253])?;
+        w.write_all(&(val as u16).to_le_bytes())?;
+    } else if val < 0x100000000 {
+        w.write_all(&[254])?;
+        w.write_all(&(val as u32).to_le_bytes())?;
+    } else {
+        w.write_all(&[255])?;
+        w.write_all(&val.to_le_bytes())?;
+    }
+    Ok(())
 }
 
 /// Sign an input for the given redeem transaction.

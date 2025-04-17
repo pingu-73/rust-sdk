@@ -146,7 +146,7 @@ pub struct VtxoOutPoint {
     pub expire_at: i64,
     pub swept: bool,
     pub is_pending: bool,
-    /// The redeem transaction which has this [`VtxoOutPoint`] as an output. The txid matches the
+    /// The redeem transaction which has this [`VtxoOutPoint`] as an output. The TXID matches the
     /// TXID of the `outpoint` field.
     pub redeem_tx: Option<Psbt>,
     pub amount: Amount,

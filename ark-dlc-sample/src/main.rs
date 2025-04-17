@@ -293,6 +293,7 @@ async fn main() -> Result<()> {
         .submit_redeem_transaction(unlocked_cet_redeem_psbt)
         .await
         .context("submitting CET")?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Verify that Alice and Bob receive the expected payouts.
 
@@ -376,7 +377,7 @@ async fn fund_vtxo(
         pk,
         server_info.unilateral_exit_delay,
         server_info.network,
-    );
+    )?;
 
     faucet_fund(boarding_output.address(), Amount::ONE_BTC).await?;
 

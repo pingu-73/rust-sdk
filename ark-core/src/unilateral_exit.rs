@@ -29,7 +29,7 @@ use std::collections::HashSet;
 
 /// A UTXO that could have become a VTXO with the help of the Ark server, but is now unilaterally
 /// spendable by the original owner.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OnChainInput {
     /// The information needed to spend the UTXO, besides the amount.
     boarding_output: BoardingOutput,
@@ -56,7 +56,7 @@ impl OnChainInput {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VtxoInput {
     /// The information needed to spend the VTXO, besides the amount.
     vtxo: Vtxo,

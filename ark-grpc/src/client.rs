@@ -103,19 +103,45 @@ impl Client {
             .await
             .map_err(Error::request)?;
 
-        let spent = response
+        let mut spent = response
             .get_ref()
             .spent_vtxos
             .iter()
             .map(VtxoOutPoint::try_from)
             .collect::<Result<Vec<_>, _>>()?;
 
-        let spendable = response
+        let mut spendable = response
             .get_ref()
             .spendable_vtxos
             .iter()
             .map(VtxoOutPoint::try_from)
             .collect::<Result<Vec<_>, _>>()?;
+
+        let mut spent_by_redeem = Vec::new();
+        for spendable_vtxo in spendable.clone() {
+            let was_spent_by_redeem = spendable.iter().any(|v| {
+                v.redeem_tx
+                    .as_ref()
+                    .map(|r| {
+                        r.unsigned_tx
+                            .input
+                            .iter()
+                            .any(|i| i.previous_output == spendable_vtxo.outpoint)
+                    })
+                    .unwrap_or_default()
+            });
+
+            if was_spent_by_redeem {
+                spent_by_redeem.push(spendable_vtxo);
+            }
+        }
+
+        // Remove "spendable" VTXOs that were actually already spent by a redeem transaction
+        // from the list of spendable VTXOs.
+        spendable.retain(|i| !spent_by_redeem.contains(i));
+
+        // Add them to the list of spent VTXOs.
+        spent.append(&mut spent_by_redeem);
 
         Ok(ListVtxo { spent, spendable })
     }

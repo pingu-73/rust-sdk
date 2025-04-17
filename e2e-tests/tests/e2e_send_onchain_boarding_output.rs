@@ -18,9 +18,9 @@ pub async fn send_onchain_boarding_output() {
 
     let nigiri = Arc::new(Nigiri::new());
 
-    // To be able to spend a boarding output it needs to have been confirmed for at least 1_024
+    // To be able to spend a boarding output it needs to have been confirmed for at least 2_048
     // seconds.
-    nigiri.set_outpoint_blocktime_offset(1_024);
+    nigiri.set_outpoint_blocktime_offset(2_048);
 
     let secp = Secp256k1::new();
 

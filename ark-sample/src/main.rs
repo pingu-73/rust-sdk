@@ -146,7 +146,7 @@ async fn main() -> Result<()> {
         pk.x_only_public_key().0,
         server_info.unilateral_exit_delay,
         server_info.network,
-    );
+    )?;
 
     let runtime = tokio::runtime::Handle::current();
     let find_outpoints_fn =

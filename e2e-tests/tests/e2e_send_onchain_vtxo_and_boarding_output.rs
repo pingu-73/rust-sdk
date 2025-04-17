@@ -47,10 +47,11 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
     wait_until_balance(&alice, fund_amount, Amount::ZERO).await;
 
     alice.commit_vtxos_on_chain().await.unwrap();
-    wait_until_balance(&alice, Amount::ZERO, Amount::ZERO).await;
 
     // Get one confirmation on the VTXO.
     nigiri.mine(1).await;
+
+    wait_until_balance(&alice, Amount::ZERO, Amount::ZERO).await;
 
     let alice_boarding_address = alice.get_boarding_address().unwrap();
     nigiri
@@ -63,8 +64,8 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
     assert_eq!(offchain_balance.pending(), Amount::ZERO);
 
     // To be able to spend a VTXO or a boarding output it needs to have been confirmed for at least
-    // 1024 seconds.
-    nigiri.set_outpoint_blocktime_offset(1024);
+    // 2048 seconds.
+    nigiri.set_outpoint_blocktime_offset(2048);
 
     let (tx, prevouts) = alice
         .create_send_on_chain_transaction(
@@ -73,7 +74,7 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
             )
             .unwrap()
             .assume_checked(),
-            Amount::from_btc(0.7).unwrap(),
+            Amount::from_btc(1.4).unwrap(),
         )
         .await
         .unwrap();
