@@ -22,6 +22,7 @@ use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 use rand::thread_rng;
 use regex::Regex;
+use std::collections::HashMap;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -214,7 +215,7 @@ impl Blockchain for Nigiri {
 
 #[derive(Default)]
 pub struct InMemoryDb {
-    boarding_outputs: RwLock<Vec<(SecretKey, BoardingOutput)>>,
+    boarding_outputs: RwLock<HashMap<BoardingOutput, SecretKey>>,
 }
 
 impl Persistence for InMemoryDb {
@@ -226,7 +227,7 @@ impl Persistence for InMemoryDb {
         self.boarding_outputs
             .write()
             .unwrap()
-            .push((sk, boarding_output));
+            .insert(boarding_output, sk);
 
         Ok(())
     }
@@ -236,9 +237,8 @@ impl Persistence for InMemoryDb {
             .boarding_outputs
             .read()
             .unwrap()
-            .clone()
-            .into_iter()
-            .map(|(_, b)| b)
+            .keys()
+            .cloned()
             .collect())
     }
 
@@ -248,7 +248,7 @@ impl Persistence for InMemoryDb {
             .read()
             .unwrap()
             .iter()
-            .find_map(|(sk, b)| if b.owner_pk() == *pk { Some(*sk) } else { None });
+            .find_map(|(b, sk)| if b.owner_pk() == *pk { Some(*sk) } else { None });
         let secret_key = maybe_sk.unwrap();
         Ok(secret_key)
     }
