@@ -7,6 +7,47 @@ use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
+use std::str::FromStr;
+
+#[derive(Clone, Debug)]
+pub enum Network {
+    Bitcoin,
+    Testnet,
+    Testnet4,
+    Signet,
+    Regtest,
+    Mutinynet,
+}
+
+impl From<Network> for bitcoin::Network {
+    fn from(value: Network) -> Self {
+        match value {
+            Network::Bitcoin => bitcoin::Network::Bitcoin,
+            Network::Testnet => bitcoin::Network::Testnet,
+            Network::Testnet4 => bitcoin::Network::Testnet4,
+            Network::Signet => bitcoin::Network::Signet,
+            Network::Regtest => bitcoin::Network::Regtest,
+            Network::Mutinynet => bitcoin::Network::Signet,
+        }
+    }
+}
+
+impl FromStr for Network {
+    type Err = String;
+
+    #[inline]
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "bitcoin" => Ok(Network::Bitcoin),
+            "testnet" => Ok(Network::Testnet),
+            "testnet4" => Ok(Network::Testnet4),
+            "signet" => Ok(Network::Signet),
+            "regtest" => Ok(Network::Regtest),
+            "mutinynet" => Ok(Network::Mutinynet),
+            _ => Err(format!("Unsupported network {}", s.to_owned())),
+        }
+    }
+}
 
 impl TryFrom<generated::ark::v1::GetInfoResponse> for server::Info {
     type Error = Error;
@@ -21,7 +62,8 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for server::Info {
             bitcoin::Sequence::from_seconds_ceil(value.unilateral_exit_delay as u32)
                 .map_err(Error::conversion)?;
 
-        let network = value.network.parse().map_err(Error::conversion)?;
+        let network = Network::from_str(value.network.as_str()).map_err(Error::conversion)?;
+        let network = bitcoin::Network::from(network);
 
         let forfeit_address: Address<NetworkUnchecked> =
             value.forfeit_address.parse().map_err(Error::conversion)?;
