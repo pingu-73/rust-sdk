@@ -34,7 +34,6 @@ use rand::CryptoRng;
 use rand::Rng;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use zkp::new_musig_nonce_pair;
 use zkp::MusigAggNonce;
 use zkp::MusigKeyAggCache;
 use zkp::MusigPartialSignature;
@@ -186,6 +185,7 @@ pub fn generate_nonce_tree<R>(
     rng: &mut R,
     unsigned_vtxo_tree: &TxTree,
     own_cosigner_pk: PublicKey,
+    round_tx: &Psbt,
 ) -> Result<NonceTree, Error>
 where
     R: Rng + CryptoRng,
@@ -195,7 +195,8 @@ where
     let nonce_tree = unsigned_vtxo_tree
         .levels
         .iter()
-        .map(|level| {
+        .enumerate()
+        .map(|(i, level)| {
             level
                 .nodes
                 .iter()
@@ -209,18 +210,25 @@ where
                     let session_id = MusigSessionId::new(rng);
                     let extra_rand = rng.gen();
 
-                    // TODO: Revisit nonce generation, because this is something
-                    // that we could mess up in a non-obvious way.
-                    let (nonce, pub_nonce) = new_musig_nonce_pair(
-                        &secp_zkp,
-                        session_id,
-                        None,
-                        None,
-                        to_zkp_pk(own_cosigner_pk),
-                        None,
-                        Some(extra_rand),
-                    )
-                    .map_err(Error::crypto)?;
+                    let msg = virtual_tx_sighash(node, unsigned_vtxo_tree, i, round_tx)?;
+
+                    let key_agg_cache = {
+                        let cosigner_pks = cosigner_pks
+                            .iter()
+                            .map(|pk| to_zkp_pk(*pk))
+                            .collect::<Vec<_>>();
+                        MusigKeyAggCache::new(&secp_zkp, &cosigner_pks)
+                    };
+
+                    let (nonce, pub_nonce) = key_agg_cache
+                        .nonce_gen(
+                            &secp_zkp,
+                            session_id,
+                            to_zkp_pk(own_cosigner_pk),
+                            msg,
+                            extra_rand,
+                        )
+                        .map_err(Error::crypto)?;
 
                     Ok(Some((Some(nonce), pub_nonce)))
                 })
@@ -229,6 +237,49 @@ where
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(NonceTree(nonce_tree))
+}
+
+fn virtual_tx_sighash(
+    // The virtual transaction to be signed.
+    node: &TxTreeNode,
+    // The entire VTXO tree, so that the parent output can be found, if needed.
+    vtxo_tree: &TxTree,
+    // How deep in the VTXO tree this virtual transaction is.
+    level: usize,
+    // The round transaction, in case it is the parent VTXO.
+    round_tx: &Psbt,
+) -> Result<zkp::Message, Error> {
+    let tx = &node.tx.unsigned_tx;
+
+    // We expect a single input to a VTXO.
+    let parent_txid = node.parent_txid;
+
+    let input_vout = tx.input[VTXO_INPUT_INDEX].previous_output.vout as usize;
+    let prevout = if level == 0 {
+        round_tx.clone().unsigned_tx.output[input_vout].clone()
+    } else {
+        let parent_level = &vtxo_tree.levels[level - 1];
+        let parent_tx = parent_level
+            .nodes
+            .iter()
+            .find_map(|node| (node.txid == parent_txid).then_some(node.tx.unsigned_tx.clone()))
+            .ok_or(Error::crypto("missing parent for VTXO {i}, {j}"))?;
+
+        parent_tx.output[input_vout].clone()
+    };
+
+    let prevouts = [prevout];
+    let prevouts = Prevouts::All(&prevouts);
+
+    // Here we are generating a key spend sighash, because the VTXO tree outputs are signed
+    // by all parties with a VTXO in this new round, so we use a musig key spend to
+    // efficiently coordinate all the parties.
+    let tap_sighash = SighashCache::new(tx)
+        .taproot_key_spend_signature_hash(VTXO_INPUT_INDEX, &prevouts, TapSighashType::Default)
+        .map_err(Error::crypto)?;
+    let msg = zkp::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
+
+    Ok(msg)
 }
 
 /// A Musig partial signature per shared internal (non-leaf) node in the VTXO tree.
@@ -303,43 +354,7 @@ pub fn sign_vtxo_tree(
             // Equivalent to parsing the individual `MusigAggNonce` from a slice.
             let agg_nonce = MusigAggNonce::new(&secp_zkp, &[agg_pub_nonce]);
 
-            let tx = &node.tx.unsigned_tx;
-
-            // We expect a single input to a VTXO.
-            let parent_txid = node.parent_txid;
-
-            let input_vout = tx.input[VTXO_INPUT_INDEX].previous_output.vout as usize;
-
-            let prevout = if i == 0 {
-                round_tx.clone().unsigned_tx.output[input_vout].clone()
-            } else {
-                let parent_level = &vtxo_tree.levels[i - 1];
-                let parent_tx = parent_level
-                    .nodes
-                    .iter()
-                    .find_map(|node| {
-                        (node.txid == parent_txid).then_some(node.tx.unsigned_tx.clone())
-                    })
-                    .ok_or(Error::crypto("missing parent for VTXO {i}, {j}"))?;
-
-                parent_tx.output[input_vout].clone()
-            };
-
-            let prevouts = [prevout];
-            let prevouts = Prevouts::All(&prevouts);
-
-            // Here we are generating a key spend sighash, because the VTXO tree outputs are signed
-            // by all parties with a VTXO in this new round, so we use a musig key spend to
-            // efficiently coordinate all the parties.
-            let tap_sighash = SighashCache::new(tx)
-                .taproot_key_spend_signature_hash(
-                    VTXO_INPUT_INDEX,
-                    &prevouts,
-                    TapSighashType::Default,
-                )
-                .map_err(Error::crypto)?;
-
-            let msg = zkp::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
+            let msg = virtual_tx_sighash(node, vtxo_tree, i, round_tx)?;
 
             let nonce_sk = our_nonce_tree
                 .take_sk(i, j)
