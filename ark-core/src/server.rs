@@ -8,6 +8,7 @@ use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::ScriptBuf;
 use bitcoin::Txid;
+use musig::musig;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
@@ -207,7 +208,7 @@ pub struct RoundSigningEvent {
 #[derive(Debug, Clone)]
 pub struct RoundSigningNoncesGeneratedEvent {
     pub id: String,
-    pub tree_nonces: Vec<Vec<Option<zkp::MusigPubNonce>>>,
+    pub tree_nonces: Vec<Vec<Option<musig::PublicNonce>>>,
 }
 
 #[derive(Debug, Clone)]

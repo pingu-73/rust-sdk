@@ -1,23 +1,22 @@
 use crate::Error;
 use bitcoin::hex::FromHex;
+use musig::musig;
 use std::io;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
-use zkp::MusigPartialSignature;
-use zkp::MusigPubNonce;
 
 pub trait ToBytes {
     fn to_bytes(&self) -> Vec<u8>;
 }
 
-impl ToBytes for MusigPubNonce {
+impl ToBytes for musig::PublicNonce {
     fn to_bytes(&self) -> Vec<u8> {
         self.serialize().to_vec()
     }
 }
 
-impl ToBytes for MusigPartialSignature {
+impl ToBytes for musig::PartialSignature {
     fn to_bytes(&self) -> Vec<u8> {
         self.serialize().to_vec()
     }
@@ -29,12 +28,12 @@ pub trait FromCursor {
         Self: Sized;
 }
 
-impl FromCursor for MusigPubNonce {
+impl FromCursor for musig::PublicNonce {
     fn from_cursor(cursor: &mut Cursor<&Vec<u8>>) -> Result<Self, Error> {
         let mut buffer = [0u8; 66];
         cursor.read_exact(&mut buffer).map_err(Error::conversion)?;
 
-        MusigPubNonce::from_slice(&buffer).map_err(Error::conversion)
+        musig::PublicNonce::from_byte_array(&buffer).map_err(Error::conversion)
     }
 }
 
@@ -119,21 +118,21 @@ mod tests {
     use super::*;
     use bitcoin::hex::DisplayHex;
     use bitcoin::hex::FromHex;
-    use zkp::MusigPubNonce;
-    use zkp::MusigSecNonce;
 
     #[test]
     fn nonce_tree_round_trip() {
         let a_bytes = Vec::from_hex("03a2ca7605303774152c9af458c9abdfa5636a8028e7bb91d4e2e6b69b60a7961e02e7d8f8d98e1b8452bec2b8132a49b97b8d3a5e8a71ce6d1b1b5a58d9263ac8dd").unwrap();
+        let a_bytes: [u8; 66] = a_bytes.try_into().unwrap();
         let b_bytes = Vec::from_hex("021a9d01ba9ef321b512f1368ff426bb8e9a7edf4ae5f0e65691a08eef604acfc7026fc797f4f8a81af2f44aee6084a34227c16656eececa41d550fc1f0f6fe765fd").unwrap();
+        let b_bytes: [u8; 66] = b_bytes.try_into().unwrap();
 
         let a = (
-            MusigSecNonce::dangerous_from_bytes([1u8; 132]),
-            MusigPubNonce::from_slice(&a_bytes).unwrap(),
+            musig::SecretNonce::dangerous_from_bytes([1u8; 132]),
+            musig::PublicNonce::from_byte_array(&a_bytes).unwrap(),
         );
         let b = (
-            MusigSecNonce::dangerous_from_bytes([2u8; 132]),
-            MusigPubNonce::from_slice(&b_bytes).unwrap(),
+            musig::SecretNonce::dangerous_from_bytes([2u8; 132]),
+            musig::PublicNonce::from_byte_array(&b_bytes).unwrap(),
         );
 
         let nonce_tree = vec![vec![Some(a.1)], vec![None, Some(b.1)]];
@@ -143,8 +142,11 @@ mod tests {
         let deserialized = decode_tree(serialized).unwrap();
 
         let pub_nonce_tree = vec![
-            vec![Some(MusigPubNonce::from_slice(&a_bytes).unwrap())],
-            vec![None, Some(MusigPubNonce::from_slice(&b_bytes).unwrap())],
+            vec![Some(musig::PublicNonce::from_byte_array(&a_bytes).unwrap())],
+            vec![
+                None,
+                Some(musig::PublicNonce::from_byte_array(&b_bytes).unwrap()),
+            ],
         ];
 
         assert_eq!(pub_nonce_tree, deserialized);

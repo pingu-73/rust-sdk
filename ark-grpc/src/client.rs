@@ -50,6 +50,7 @@ use bitcoin::Txid;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
+use musig::musig;
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -257,7 +258,7 @@ impl Client {
         &self,
         round_id: &str,
         cosigner_pubkey: PublicKey,
-        pub_nonce_tree: Vec<Vec<Option<zkp::MusigPubNonce>>>,
+        pub_nonce_tree: Vec<Vec<Option<musig::PublicNonce>>>,
     ) -> Result<(), Error> {
         let mut client = self.inner_ark_client()?;
 
@@ -279,7 +280,7 @@ impl Client {
         &self,
         round_id: &str,
         cosigner_pk: PublicKey,
-        partial_sig_tree: Vec<Vec<Option<zkp::MusigPartialSignature>>>,
+        partial_sig_tree: Vec<Vec<Option<musig::PartialSignature>>>,
     ) -> Result<(), Error> {
         let mut client = self.inner_ark_client()?;
 

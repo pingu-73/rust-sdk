@@ -4,8 +4,6 @@ use anyhow::Context;
 use anyhow::Result;
 use ark_core::boarding_output::list_boarding_outpoints;
 use ark_core::boarding_output::BoardingOutpoints;
-use ark_core::conversions::from_zkp_xonly;
-use ark_core::conversions::to_zkp_pk;
 use ark_core::redeem;
 use ark_core::redeem::build_redeem_transaction;
 use ark_core::redeem::sign_redeem_transaction;
@@ -50,11 +48,11 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::time::Duration;
 use tokio::task::block_in_place;
-use zkp::musig;
-use zkp::new_musig_nonce_pair;
-use zkp::MusigAggNonce;
-use zkp::MusigSession;
-use zkp::MusigSessionId;
+use zkp::musig::new_musig_nonce_pair;
+use zkp::musig::MusigAggNonce;
+use zkp::musig::MusigKeyAggCache;
+use zkp::musig::MusigSession;
+use zkp::musig::MusigSessionId;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -113,7 +111,7 @@ async fn main() -> Result<()> {
 
     // Using Musig2, the server is not even aware that this is a shared VTXO.
     let musig_key_agg_cache =
-        musig::MusigKeyAggCache::new(&zkp, &[to_zkp_pk(alice_pk), to_zkp_pk(bob_pk)]);
+        MusigKeyAggCache::new(&zkp, &[to_zkp_pk(alice_pk), to_zkp_pk(bob_pk)]);
     let shared_pk = musig_key_agg_cache.agg_pk();
     let shared_pk = from_zkp_xonly(shared_pk);
 
@@ -283,7 +281,7 @@ async fn main() -> Result<()> {
 
     // Complete the adaptor signature, producing a valid signature for this CET.
 
-    let sig = musig::adapt(adaptor_sig, adaptor, musig_nonce_parity);
+    let sig = zkp::musig::adapt(adaptor_sig, adaptor, musig_nonce_parity);
     let sig = schnorr::Signature::from_slice(sig.as_ref()).expect("valid sig");
 
     input_sig.signature = sig;
@@ -433,7 +431,7 @@ fn sign_cet_redeem_tx(
     mut cet_redeem_psbt: Psbt,
     alice_kp: &Keypair,
     bob_kp: &Keypair,
-    musig_key_agg_cache: &musig::MusigKeyAggCache,
+    musig_key_agg_cache: &MusigKeyAggCache,
     adaptor_pk: zkp::PublicKey,
     dlc_vtxo_input: &redeem::VtxoInput,
 ) -> Result<(Psbt, zkp::Parity)> {
@@ -823,7 +821,7 @@ pub struct SpendStatus {
 }
 
 impl EsploraClient {
-    pub fn new(url: &str) -> Result<Self> {
+    fn new(url: &str) -> Result<Self> {
         let builder = esplora_client::Builder::new(url);
         let esplora_client = builder.build_async()?;
 
@@ -895,7 +893,7 @@ impl EsploraClient {
     }
 }
 
-pub async fn faucet_fund(address: &bitcoin::Address, amount: Amount) -> Result<OutPoint> {
+async fn faucet_fund(address: &bitcoin::Address, amount: Amount) -> Result<OutPoint> {
     let res = Command::new("nigiri")
         .args(["faucet", &address.to_string(), &amount.to_btc().to_string()])
         .output()?;
@@ -942,7 +940,15 @@ pub async fn faucet_fund(address: &bitcoin::Address, amount: Amount) -> Result<O
     })
 }
 
-pub fn init_tracing() {
+fn to_zkp_pk(pk: secp256k1::PublicKey) -> zkp::PublicKey {
+    zkp::PublicKey::from_slice(&pk.serialize()).expect("valid conversion")
+}
+
+pub fn from_zkp_xonly(pk: zkp::XOnlyPublicKey) -> XOnlyPublicKey {
+    XOnlyPublicKey::from_slice(&pk.serialize()).expect("valid conversion")
+}
+
+fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(
             "debug,\
