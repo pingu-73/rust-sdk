@@ -9,20 +9,14 @@
  */
 
 use super::configuration;
+use super::ContentType;
 use super::Error;
 use crate::apis::ResponseContent;
 use crate::models;
 use reqwest;
+use serde::de::Error as _;
 use serde::Deserialize;
 use serde::Serialize;
-
-/// struct for typed errors of method [`ark_service_delete_nostr_recipient`]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ArkServiceDeleteNostrRecipientError {
-    DefaultResponse(models::RpcStatus),
-    UnknownValue(serde_json::Value),
-}
 
 /// struct for typed errors of method [`ark_service_get_boarding_address`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,34 +42,10 @@ pub enum ArkServiceGetInfoError {
     UnknownValue(serde_json::Value),
 }
 
-/// struct for typed errors of method [`ark_service_get_round`]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ArkServiceGetRoundError {
-    DefaultResponse(models::RpcStatus),
-    UnknownValue(serde_json::Value),
-}
-
-/// struct for typed errors of method [`ark_service_get_round_by_id`]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ArkServiceGetRoundByIdError {
-    DefaultResponse(models::RpcStatus),
-    UnknownValue(serde_json::Value),
-}
-
 /// struct for typed errors of method [`ark_service_get_transactions_stream`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ArkServiceGetTransactionsStreamError {
-    DefaultResponse(models::RpcStatus),
-    UnknownValue(serde_json::Value),
-}
-
-/// struct for typed errors of method [`ark_service_list_vtxos`]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ArkServiceListVtxosError {
     DefaultResponse(models::RpcStatus),
     UnknownValue(serde_json::Value),
 }
@@ -96,18 +66,18 @@ pub enum ArkServiceRegisterInputsForNextRoundError {
     UnknownValue(serde_json::Value),
 }
 
-/// struct for typed errors of method [`ark_service_register_outputs_for_next_round`]
+/// struct for typed errors of method [`ark_service_register_intent`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum ArkServiceRegisterOutputsForNextRoundError {
+pub enum ArkServiceRegisterIntentError {
     DefaultResponse(models::RpcStatus),
     UnknownValue(serde_json::Value),
 }
 
-/// struct for typed errors of method [`ark_service_set_nostr_recipient`]
+/// struct for typed errors of method [`ark_service_register_outputs_for_next_round`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum ArkServiceSetNostrRecipientError {
+pub enum ArkServiceRegisterOutputsForNextRoundError {
     DefaultResponse(models::RpcStatus),
     UnknownValue(serde_json::Value),
 }
@@ -144,43 +114,6 @@ pub enum ArkServiceSubmitTreeSignaturesError {
     UnknownValue(serde_json::Value),
 }
 
-pub async fn ark_service_delete_nostr_recipient(
-    configuration: &configuration::Configuration,
-    body: models::V1DeleteNostrRecipientRequest,
-) -> Result<serde_json::Value, Error<ArkServiceDeleteNostrRecipientError>> {
-    // add a prefix to parameters to efficiently prevent name collisions
-    let p_body = body;
-
-    let uri_str = format!("{}/v1/vtxo/nostr/delete", configuration.base_path);
-    let mut req_builder = configuration
-        .client
-        .request(reqwest::Method::POST, &uri_str);
-
-    if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
-    }
-    req_builder = req_builder.json(&p_body);
-
-    let req = req_builder.build()?;
-    let resp = configuration.client.execute(req).await?;
-
-    let status = resp.status();
-
-    if !status.is_client_error() && !status.is_server_error() {
-        let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
-    } else {
-        let content = resp.text().await?;
-        let entity: Option<ArkServiceDeleteNostrRecipientError> =
-            serde_json::from_str(&content).ok();
-        Err(Error::ResponseError(ResponseContent {
-            status,
-            content,
-            entity,
-        }))
-    }
-}
-
 pub async fn ark_service_get_boarding_address(
     configuration: &configuration::Configuration,
     body: models::V1GetBoardingAddressRequest,
@@ -202,10 +135,20 @@ pub async fn ark_service_get_boarding_address(
     let resp = configuration.client.execute(req).await?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
 
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::V1GetBoardingAddressResponse`"))),
+            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `models::V1GetBoardingAddressResponse`")))),
+        }
     } else {
         let content = resp.text().await?;
         let entity: Option<ArkServiceGetBoardingAddressError> = serde_json::from_str(&content).ok();
@@ -231,10 +174,20 @@ pub async fn ark_service_get_event_stream(
     let resp = configuration.client.execute(req).await?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
 
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::StreamResultOfV1GetEventStreamResponse`"))),
+            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `models::StreamResultOfV1GetEventStreamResponse`")))),
+        }
     } else {
         let content = resp.text().await?;
         let entity: Option<ArkServiceGetEventStreamError> = serde_json::from_str(&content).ok();
@@ -260,87 +213,23 @@ pub async fn ark_service_get_info(
     let resp = configuration.client.execute(req).await?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
 
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::V1GetInfoResponse`"))),
+            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `models::V1GetInfoResponse`")))),
+        }
     } else {
         let content = resp.text().await?;
         let entity: Option<ArkServiceGetInfoError> = serde_json::from_str(&content).ok();
-        Err(Error::ResponseError(ResponseContent {
-            status,
-            content,
-            entity,
-        }))
-    }
-}
-
-pub async fn ark_service_get_round(
-    configuration: &configuration::Configuration,
-    txid: &str,
-) -> Result<models::V1GetRoundResponse, Error<ArkServiceGetRoundError>> {
-    // add a prefix to parameters to efficiently prevent name collisions
-    let p_txid = txid;
-
-    let uri_str = format!(
-        "{}/v1/round/{txid}",
-        configuration.base_path,
-        txid = crate::apis::urlencode(p_txid)
-    );
-    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
-
-    if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
-    }
-
-    let req = req_builder.build()?;
-    let resp = configuration.client.execute(req).await?;
-
-    let status = resp.status();
-
-    if !status.is_client_error() && !status.is_server_error() {
-        let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
-    } else {
-        let content = resp.text().await?;
-        let entity: Option<ArkServiceGetRoundError> = serde_json::from_str(&content).ok();
-        Err(Error::ResponseError(ResponseContent {
-            status,
-            content,
-            entity,
-        }))
-    }
-}
-
-pub async fn ark_service_get_round_by_id(
-    configuration: &configuration::Configuration,
-    id: &str,
-) -> Result<models::V1GetRoundByIdResponse, Error<ArkServiceGetRoundByIdError>> {
-    // add a prefix to parameters to efficiently prevent name collisions
-    let p_id = id;
-
-    let uri_str = format!(
-        "{}/v1/round/id/{id}",
-        configuration.base_path,
-        id = crate::apis::urlencode(p_id)
-    );
-    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
-
-    if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
-    }
-
-    let req = req_builder.build()?;
-    let resp = configuration.client.execute(req).await?;
-
-    let status = resp.status();
-
-    if !status.is_client_error() && !status.is_server_error() {
-        let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
-    } else {
-        let content = resp.text().await?;
-        let entity: Option<ArkServiceGetRoundByIdError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -366,51 +255,24 @@ pub async fn ark_service_get_transactions_stream(
     let resp = configuration.client.execute(req).await?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
 
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::StreamResultOfV1GetTransactionsStreamResponse`"))),
+            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `models::StreamResultOfV1GetTransactionsStreamResponse`")))),
+        }
     } else {
         let content = resp.text().await?;
         let entity: Option<ArkServiceGetTransactionsStreamError> =
             serde_json::from_str(&content).ok();
-        Err(Error::ResponseError(ResponseContent {
-            status,
-            content,
-            entity,
-        }))
-    }
-}
-
-pub async fn ark_service_list_vtxos(
-    configuration: &configuration::Configuration,
-    address: &str,
-) -> Result<models::V1ListVtxosResponse, Error<ArkServiceListVtxosError>> {
-    // add a prefix to parameters to efficiently prevent name collisions
-    let p_address = address;
-
-    let uri_str = format!(
-        "{}/v1/vtxos/{address}",
-        configuration.base_path,
-        address = crate::apis::urlencode(p_address)
-    );
-    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
-
-    if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
-    }
-
-    let req = req_builder.build()?;
-    let resp = configuration.client.execute(req).await?;
-
-    let status = resp.status();
-
-    if !status.is_client_error() && !status.is_server_error() {
-        let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
-    } else {
-        let content = resp.text().await?;
-        let entity: Option<ArkServiceListVtxosError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -441,10 +303,20 @@ pub async fn ark_service_ping(
     let resp = configuration.client.execute(req).await?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
 
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `serde_json::Value`"))),
+            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `serde_json::Value`")))),
+        }
     } else {
         let content = resp.text().await?;
         let entity: Option<ArkServicePingError> = serde_json::from_str(&content).ok();
@@ -480,14 +352,70 @@ pub async fn ark_service_register_inputs_for_next_round(
     let resp = configuration.client.execute(req).await?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
 
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::V1RegisterInputsForNextRoundResponse`"))),
+            ContentType::Unsupported(unknown_type) =>  Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `models::V1RegisterInputsForNextRoundResponse`")))),
+        }
     } else {
         let content = resp.text().await?;
         let entity: Option<ArkServiceRegisterInputsForNextRoundError> =
             serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+pub async fn ark_service_register_intent(
+    configuration: &configuration::Configuration,
+    body: models::V1RegisterIntentRequest,
+) -> Result<models::V1RegisterIntentResponse, Error<ArkServiceRegisterIntentError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_body = body;
+
+    let uri_str = format!("{}/v1/round/registerIntent", configuration.base_path);
+    let mut req_builder = configuration
+        .client
+        .request(reqwest::Method::POST, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    req_builder = req_builder.json(&p_body);
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req).await?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text().await?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::V1RegisterIntentResponse`"))),
+            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `models::V1RegisterIntentResponse`")))),
+        }
+    } else {
+        let content = resp.text().await?;
+        let entity: Option<ArkServiceRegisterIntentError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -517,50 +445,24 @@ pub async fn ark_service_register_outputs_for_next_round(
     let resp = configuration.client.execute(req).await?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
 
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `serde_json::Value`"))),
+            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `serde_json::Value`")))),
+        }
     } else {
         let content = resp.text().await?;
         let entity: Option<ArkServiceRegisterOutputsForNextRoundError> =
             serde_json::from_str(&content).ok();
-        Err(Error::ResponseError(ResponseContent {
-            status,
-            content,
-            entity,
-        }))
-    }
-}
-
-pub async fn ark_service_set_nostr_recipient(
-    configuration: &configuration::Configuration,
-    body: models::V1SetNostrRecipientRequest,
-) -> Result<serde_json::Value, Error<ArkServiceSetNostrRecipientError>> {
-    // add a prefix to parameters to efficiently prevent name collisions
-    let p_body = body;
-
-    let uri_str = format!("{}/v1/vtxo/nostr", configuration.base_path);
-    let mut req_builder = configuration
-        .client
-        .request(reqwest::Method::POST, &uri_str);
-
-    if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
-    }
-    req_builder = req_builder.json(&p_body);
-
-    let req = req_builder.build()?;
-    let resp = configuration.client.execute(req).await?;
-
-    let status = resp.status();
-
-    if !status.is_client_error() && !status.is_server_error() {
-        let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
-    } else {
-        let content = resp.text().await?;
-        let entity: Option<ArkServiceSetNostrRecipientError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -590,10 +492,20 @@ pub async fn ark_service_submit_redeem_tx(
     let resp = configuration.client.execute(req).await?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
 
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::V1SubmitRedeemTxResponse`"))),
+            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `models::V1SubmitRedeemTxResponse`")))),
+        }
     } else {
         let content = resp.text().await?;
         let entity: Option<ArkServiceSubmitRedeemTxError> = serde_json::from_str(&content).ok();
@@ -626,10 +538,20 @@ pub async fn ark_service_submit_signed_forfeit_txs(
     let resp = configuration.client.execute(req).await?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
 
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `serde_json::Value`"))),
+            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `serde_json::Value`")))),
+        }
     } else {
         let content = resp.text().await?;
         let entity: Option<ArkServiceSubmitSignedForfeitTxsError> =
@@ -663,10 +585,20 @@ pub async fn ark_service_submit_tree_nonces(
     let resp = configuration.client.execute(req).await?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
 
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `serde_json::Value`"))),
+            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `serde_json::Value`")))),
+        }
     } else {
         let content = resp.text().await?;
         let entity: Option<ArkServiceSubmitTreeNoncesError> = serde_json::from_str(&content).ok();
@@ -699,10 +631,20 @@ pub async fn ark_service_submit_tree_signatures(
     let resp = configuration.client.execute(req).await?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
 
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
-        serde_json::from_str(&content).map_err(Error::from)
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `serde_json::Value`"))),
+            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `serde_json::Value`")))),
+        }
     } else {
         let content = resp.text().await?;
         let entity: Option<ArkServiceSubmitTreeSignaturesError> =

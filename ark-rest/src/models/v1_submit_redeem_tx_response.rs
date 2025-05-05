@@ -16,12 +16,15 @@ use serde::Serialize;
 pub struct V1SubmitRedeemTxResponse {
     #[serde(rename = "signedRedeemTx", skip_serializing_if = "Option::is_none")]
     pub signed_redeem_tx: Option<String>,
+    #[serde(rename = "txid", skip_serializing_if = "Option::is_none")]
+    pub txid: Option<String>,
 }
 
 impl V1SubmitRedeemTxResponse {
     pub fn new() -> V1SubmitRedeemTxResponse {
         V1SubmitRedeemTxResponse {
             signed_redeem_tx: None,
+            txid: None,
         }
     }
 }

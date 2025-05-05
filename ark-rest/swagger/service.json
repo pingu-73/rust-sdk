@@ -133,36 +133,6 @@
         ]
       }
     },
-    "/v1/round/id/{id}": {
-      "get": {
-        "operationId": "ArkService_GetRoundById",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1GetRoundByIdResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "type": "string"
-          }
-        ],
-        "tags": [
-          "ArkService"
-        ]
-      }
-    },
     "/v1/round/ping/{requestId}": {
       "get": {
         "operationId": "ArkService_Ping",
@@ -218,6 +188,38 @@
             "required": true,
             "schema": {
               "$ref": "#/definitions/v1RegisterInputsForNextRoundRequest"
+            }
+          }
+        ],
+        "tags": [
+          "ArkService"
+        ]
+      }
+    },
+    "/v1/round/registerIntent": {
+      "post": {
+        "operationId": "ArkService_RegisterIntent",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1RegisterIntentResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1RegisterIntentRequest"
             }
           }
         ],
@@ -354,36 +356,6 @@
         ]
       }
     },
-    "/v1/round/{txid}": {
-      "get": {
-        "operationId": "ArkService_GetRound",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1GetRoundResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "txid",
-            "in": "path",
-            "required": true,
-            "type": "string"
-          }
-        ],
-        "tags": [
-          "ArkService"
-        ]
-      }
-    },
     "/v1/transactions": {
       "get": {
         "operationId": "ArkService_GetTransactionsStream",
@@ -410,100 +382,6 @@
             }
           }
         },
-        "tags": [
-          "ArkService"
-        ]
-      }
-    },
-    "/v1/vtxo/nostr": {
-      "post": {
-        "operationId": "ArkService_SetNostrRecipient",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1SetNostrRecipientResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/v1SetNostrRecipientRequest"
-            }
-          }
-        ],
-        "tags": [
-          "ArkService"
-        ]
-      }
-    },
-    "/v1/vtxo/nostr/delete": {
-      "post": {
-        "operationId": "ArkService_DeleteNostrRecipient",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1DeleteNostrRecipientResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/v1DeleteNostrRecipientRequest"
-            }
-          }
-        ],
-        "tags": [
-          "ArkService"
-        ]
-      }
-    },
-    "/v1/vtxos/{address}": {
-      "get": {
-        "operationId": "ArkService_ListVtxos",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1ListVtxosResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "address",
-            "in": "path",
-            "required": true,
-            "type": "string"
-          }
-        ],
         "tags": [
           "ArkService"
         ]
@@ -539,20 +417,16 @@
         }
       }
     },
-    "v1DeleteNostrRecipientRequest": {
+    "v1Bip322Signature": {
       "type": "object",
       "properties": {
-        "vtxos": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/v1SignedVtxoOutpoint"
-          }
+        "signature": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
         }
       }
-    },
-    "v1DeleteNostrRecipientResponse": {
-      "type": "object"
     },
     "v1GetBoardingAddressRequest": {
       "type": "object",
@@ -602,7 +476,7 @@
         "pubkey": {
           "type": "string"
         },
-        "roundLifetime": {
+        "vtxoTreeExpiry": {
           "type": "string",
           "format": "int64"
         },
@@ -635,22 +509,33 @@
         },
         "marketHour": {
           "$ref": "#/definitions/v1MarketHour"
-        }
-      }
-    },
-    "v1GetRoundByIdResponse": {
-      "type": "object",
-      "properties": {
-        "round": {
-          "$ref": "#/definitions/v1Round"
-        }
-      }
-    },
-    "v1GetRoundResponse": {
-      "type": "object",
-      "properties": {
-        "round": {
-          "$ref": "#/definitions/v1Round"
+        },
+        "version": {
+          "type": "string"
+        },
+        "utxoMinAmount": {
+          "type": "string",
+          "format": "int64",
+          "title": "-1 means native dust limit (default)"
+        },
+        "utxoMaxAmount": {
+          "type": "string",
+          "format": "int64",
+          "title": "-1 means no limit (default), 0 means boarding not allowed"
+        },
+        "vtxoMinAmount": {
+          "type": "string",
+          "format": "int64",
+          "title": "-1 means native dust limit (default)"
+        },
+        "vtxoMaxAmount": {
+          "type": "string",
+          "format": "int64",
+          "title": "-1 means no limit (default)"
+        },
+        "boardingExitDelay": {
+          "type": "string",
+          "format": "int64"
         }
       }
     },
@@ -679,41 +564,38 @@
         }
       }
     },
-    "v1ListVtxosResponse": {
-      "type": "object",
-      "properties": {
-        "spendableVtxos": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/v1Vtxo"
-          }
-        },
-        "spentVtxos": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/v1Vtxo"
-          }
-        }
-      }
-    },
     "v1MarketHour": {
       "type": "object",
       "properties": {
         "nextStartTime": {
           "type": "string",
-          "format": "date-time"
+          "format": "int64"
         },
         "nextEndTime": {
           "type": "string",
-          "format": "date-time"
+          "format": "int64"
         },
         "period": {
-          "type": "string"
+          "type": "string",
+          "format": "int64"
         },
         "roundInterval": {
-          "type": "string"
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "v1Musig2": {
+      "type": "object",
+      "properties": {
+        "cosignersPublicKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "signingAll": {
+          "type": "boolean"
         }
       }
     },
@@ -757,22 +639,6 @@
         }
       }
     },
-    "v1OwnershipProof": {
-      "type": "object",
-      "properties": {
-        "controlBlock": {
-          "type": "string"
-        },
-        "script": {
-          "type": "string"
-        },
-        "signature": {
-          "type": "string",
-          "title": "VTXO outpoint signed with script's secret key"
-        }
-      },
-      "description": "This message is used to prove to the server that the user controls the vtxo without revealing the whole VTXO taproot tree."
-    },
     "v1PingResponse": {
       "type": "object"
     },
@@ -786,7 +652,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "$ref": "#/definitions/v1Outpoint"
+            "$ref": "#/definitions/v1Vtxo"
           }
         },
         "spendableVtxos": {
@@ -795,6 +661,9 @@
             "type": "object",
             "$ref": "#/definitions/v1Vtxo"
           }
+        },
+        "hex": {
+          "type": "string"
         }
       }
     },
@@ -808,9 +677,6 @@
             "$ref": "#/definitions/v1Input"
           }
         },
-        "ephemeralPubkey": {
-          "type": "string"
-        },
         "notes": {
           "type": "array",
           "items": {
@@ -820,6 +686,29 @@
       }
     },
     "v1RegisterInputsForNextRoundResponse": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        }
+      }
+    },
+    "v1RegisterIntentRequest": {
+      "type": "object",
+      "properties": {
+        "bip322Signature": {
+          "$ref": "#/definitions/v1Bip322Signature",
+          "title": "BIP322 signature embeds the outpoints and the proof of funds"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "v1RegisterIntentResponse": {
       "type": "object",
       "properties": {
         "requestId": {
@@ -840,48 +729,14 @@
             "$ref": "#/definitions/v1Output"
           },
           "description": "List of receivers for to convert to leaves in the next VTXO tree."
+        },
+        "musig2": {
+          "$ref": "#/definitions/v1Musig2"
         }
       }
     },
     "v1RegisterOutputsForNextRoundResponse": {
       "type": "object"
-    },
-    "v1Round": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "start": {
-          "type": "string",
-          "format": "int64"
-        },
-        "end": {
-          "type": "string",
-          "format": "int64"
-        },
-        "roundTx": {
-          "type": "string"
-        },
-        "vtxoTree": {
-          "$ref": "#/definitions/v1Tree"
-        },
-        "forfeitTxs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "connectors": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "stage": {
-          "$ref": "#/definitions/v1RoundStage"
-        }
-      }
     },
     "v1RoundFailed": {
       "type": "object",
@@ -907,14 +762,18 @@
           "$ref": "#/definitions/v1Tree"
         },
         "connectors": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "$ref": "#/definitions/v1Tree"
         },
         "minRelayFeeRate": {
           "type": "string",
           "format": "int64"
+        },
+        "connectorsIndex": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/v1Outpoint"
+          },
+          "title": "vtxo outpoint encoded as string -\u003e connector outpoint"
         }
       }
     },
@@ -960,17 +819,6 @@
         }
       }
     },
-    "v1RoundStage": {
-      "type": "string",
-      "enum": [
-        "ROUND_STAGE_UNSPECIFIED",
-        "ROUND_STAGE_REGISTRATION",
-        "ROUND_STAGE_FINALIZATION",
-        "ROUND_STAGE_FINALIZED",
-        "ROUND_STAGE_FAILED"
-      ],
-      "default": "ROUND_STAGE_UNSPECIFIED"
-    },
     "v1RoundTransaction": {
       "type": "object",
       "properties": {
@@ -981,7 +829,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "$ref": "#/definitions/v1Outpoint"
+            "$ref": "#/definitions/v1Vtxo"
           }
         },
         "spendableVtxos": {
@@ -997,35 +845,9 @@
             "type": "object",
             "$ref": "#/definitions/v1Outpoint"
           }
-        }
-      }
-    },
-    "v1SetNostrRecipientRequest": {
-      "type": "object",
-      "properties": {
-        "nostrRecipient": {
+        },
+        "hex": {
           "type": "string"
-        },
-        "vtxos": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/v1SignedVtxoOutpoint"
-          }
-        }
-      }
-    },
-    "v1SetNostrRecipientResponse": {
-      "type": "object"
-    },
-    "v1SignedVtxoOutpoint": {
-      "type": "object",
-      "properties": {
-        "outpoint": {
-          "$ref": "#/definitions/v1Outpoint"
-        },
-        "proof": {
-          "$ref": "#/definitions/v1OwnershipProof"
         }
       }
     },
@@ -1041,6 +863,9 @@
       "type": "object",
       "properties": {
         "signedRedeemTx": {
+          "type": "string"
+        },
+        "txid": {
           "type": "string"
         }
       }
