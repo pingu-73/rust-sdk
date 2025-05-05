@@ -15,6 +15,7 @@ bitcoin = { version = "0.32.4", features = ["rand"] }
 bitcoinconsensus = "0.106.0"
 esplora-client = { version = "0.10.0", features = ["async-https", "blocking-https"] }
 futures = "0.3.31"
+musig = { package = "ark-secp256k1", path = "../ark-rust-secp256k1", features = ["serde"] }
 prost = "0.13.3"
 rand = "0.8.5"
 regex = "1"
@@ -22,4 +23,3 @@ tokio = { version = "1.41.0", features = ["full"] }
 tonic = "0.12.3"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "env-filter", "time", "tracing-log", "json"] }
-zkp = { package = "ark-secp256k1-zkp", version = "0.10.0", path = "../ark-rust-secp256k1-zkp", features = ["serde", "rand-std"] }

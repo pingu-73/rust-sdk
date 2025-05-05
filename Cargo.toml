@@ -7,7 +7,7 @@ members = [
   "ark-bdk-wallet",
   "e2e-tests",
   "ark-sample",
-  "ark-rust-secp256k1-zkp",
+  "ark-rust-secp256k1",
   "ark-dlc-sample",
   "ark-rs",
 ]

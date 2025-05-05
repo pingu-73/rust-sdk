@@ -1,5 +1,5 @@
-use crate::conversions::from_zkp_xonly;
-use crate::conversions::to_zkp_pk;
+use crate::conversions::from_musig_xonly;
+use crate::conversions::to_musig_pk;
 use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::internal_node::VtxoTreeInternalNodeScript;
 use crate::server::TxTree;
@@ -30,17 +30,11 @@ use bitcoin::Transaction;
 use bitcoin::TxIn;
 use bitcoin::TxOut;
 use bitcoin::XOnlyPublicKey;
+use musig::musig;
 use rand::CryptoRng;
 use rand::Rng;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use zkp::MusigAggNonce;
-use zkp::MusigKeyAggCache;
-use zkp::MusigPartialSignature;
-use zkp::MusigPubNonce;
-use zkp::MusigSecNonce;
-use zkp::MusigSession;
-use zkp::MusigSessionId;
 
 /// The cosigner PKs that sign a VTXO TX input are included in the `unknown` key-value map field of
 /// that input in the VTXO PSBT. Since the `unknown` field can be used for any purpose, we know that
@@ -119,14 +113,14 @@ impl VtxoInput {
 /// copied. We use the [`Option`] to move it into the [`NonceTree`] during nonce generation, and out
 /// of the [`NonceTree`] when signing the VTXO tree.
 #[allow(clippy::type_complexity)]
-pub struct NonceTree(Vec<Vec<Option<(Option<MusigSecNonce>, MusigPubNonce)>>>);
+pub struct NonceTree(Vec<Vec<Option<(Option<musig::SecretNonce>, musig::PublicNonce)>>>);
 
 impl NonceTree {
     /// Take ownership of the [`MusigSecNonce`] at level `i` and branch `j` in the tree.
     ///
     /// The caller must take ownership because the [`MusigSecNonce`] ensures that it can only be
     /// used once, to avoid nonce reuse.
-    pub fn take_sk(&mut self, i: usize, j: usize) -> Option<MusigSecNonce> {
+    pub fn take_sk(&mut self, i: usize, j: usize) -> Option<musig::SecretNonce> {
         self.0
             .get_mut(i)
             .and_then(|level| {
@@ -156,11 +150,11 @@ impl NonceTree {
 
 /// A public nonce per shared internal (non-leaf) node in the VTXO tree.
 #[derive(Debug)]
-pub struct PubNonceTree(Vec<Vec<Option<MusigPubNonce>>>);
+pub struct PubNonceTree(Vec<Vec<Option<musig::PublicNonce>>>);
 
 impl PubNonceTree {
     /// Get the [`MusigPubNonce`] at level `i` and branch `j` in the tree.
-    pub fn get(&self, i: usize, j: usize) -> Option<MusigPubNonce> {
+    pub fn get(&self, i: usize, j: usize) -> Option<musig::PublicNonce> {
         self.0
             .get(i)
             .and_then(|level| level.get(j))
@@ -169,13 +163,13 @@ impl PubNonceTree {
     }
 
     /// Get the underlying matrix of [`MusigPubNonce`]s.
-    pub fn into_inner(self) -> Vec<Vec<Option<MusigPubNonce>>> {
+    pub fn into_inner(self) -> Vec<Vec<Option<musig::PublicNonce>>> {
         self.0
     }
 }
 
-impl From<Vec<Vec<Option<MusigPubNonce>>>> for PubNonceTree {
-    fn from(value: Vec<Vec<Option<MusigPubNonce>>>) -> Self {
+impl From<Vec<Vec<Option<musig::PublicNonce>>>> for PubNonceTree {
+    fn from(value: Vec<Vec<Option<musig::PublicNonce>>>) -> Self {
         Self(value)
     }
 }
@@ -190,7 +184,7 @@ pub fn generate_nonce_tree<R>(
 where
     R: Rng + CryptoRng,
 {
-    let secp_zkp = zkp::Secp256k1::new();
+    let secp_musig = ::musig::Secp256k1::new();
 
     let nonce_tree = unsigned_vtxo_tree
         .levels
@@ -207,7 +201,10 @@ where
                         return Ok(None);
                     }
 
-                    let session_id = MusigSessionId::new(rng);
+                    // TODO: We would like to use our own RNG here, but this library is using a
+                    // different version of `rand`. I think it's not worth the hassle at this stage,
+                    // particularly because this duplicated dependency will go away anyway.
+                    let session_id = musig::SessionSecretRand::new();
                     let extra_rand = rng.gen();
 
                     let msg = virtual_tx_sighash(node, unsigned_vtxo_tree, i, round_tx)?;
@@ -215,20 +212,21 @@ where
                     let key_agg_cache = {
                         let cosigner_pks = cosigner_pks
                             .iter()
-                            .map(|pk| to_zkp_pk(*pk))
+                            .map(|pk| to_musig_pk(*pk))
                             .collect::<Vec<_>>();
-                        MusigKeyAggCache::new(&secp_zkp, &cosigner_pks)
+                        musig::KeyAggCache::new(
+                            &secp_musig,
+                            &cosigner_pks.iter().collect::<Vec<_>>(),
+                        )
                     };
 
-                    let (nonce, pub_nonce) = key_agg_cache
-                        .nonce_gen(
-                            &secp_zkp,
-                            session_id,
-                            to_zkp_pk(own_cosigner_pk),
-                            msg,
-                            extra_rand,
-                        )
-                        .map_err(Error::crypto)?;
+                    let (nonce, pub_nonce) = key_agg_cache.nonce_gen(
+                        &secp_musig,
+                        session_id,
+                        to_musig_pk(own_cosigner_pk),
+                        msg,
+                        extra_rand,
+                    );
 
                     Ok(Some((Some(nonce), pub_nonce)))
                 })
@@ -248,7 +246,7 @@ fn virtual_tx_sighash(
     level: usize,
     // The round transaction, in case it is the parent VTXO.
     round_tx: &Psbt,
-) -> Result<zkp::Message, Error> {
+) -> Result<::musig::Message, Error> {
     let tx = &node.tx.unsigned_tx;
 
     // We expect a single input to a VTXO.
@@ -277,17 +275,17 @@ fn virtual_tx_sighash(
     let tap_sighash = SighashCache::new(tx)
         .taproot_key_spend_signature_hash(VTXO_INPUT_INDEX, &prevouts, TapSighashType::Default)
         .map_err(Error::crypto)?;
-    let msg = zkp::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
+    let msg = ::musig::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
 
     Ok(msg)
 }
 
 /// A Musig partial signature per shared internal (non-leaf) node in the VTXO tree.
-pub struct PartialSigTree(Vec<Vec<Option<MusigPartialSignature>>>);
+pub struct PartialSigTree(Vec<Vec<Option<musig::PartialSignature>>>);
 
 impl PartialSigTree {
     /// Get the underlying matrix of [`MusigPartialSignature`]s.
-    pub fn into_inner(self) -> Vec<Vec<Option<MusigPartialSignature>>> {
+    pub fn into_inner(self) -> Vec<Vec<Option<musig::PartialSignature>>> {
         self.0
     }
 }
@@ -309,13 +307,13 @@ pub fn sign_vtxo_tree(
     let internal_node_script = VtxoTreeInternalNodeScript::new(vtxo_tree_expiry, server_pk);
 
     let secp = Secp256k1::new();
-    let secp_zkp = zkp::Secp256k1::new();
+    let secp_musig = ::musig::Secp256k1::new();
 
     let own_cosigner_kp =
-        zkp::Keypair::from_seckey_slice(&secp_zkp, &own_cosigner_kp.secret_bytes())
+        ::musig::Keypair::from_seckey_slice(&secp_musig, &own_cosigner_kp.secret_bytes())
             .expect("valid keypair");
 
-    let mut partial_sig_tree: Vec<Vec<Option<MusigPartialSignature>>> = Vec::new();
+    let mut partial_sig_tree: Vec<Vec<Option<musig::PartialSignature>>> = Vec::new();
     for (i, level) in vtxo_tree.levels.iter().enumerate() {
         let mut sigs_level = Vec::new();
         for (j, node) in level.nodes.iter().enumerate() {
@@ -332,19 +330,21 @@ pub fn sign_vtxo_tree(
             let mut key_agg_cache = {
                 let cosigner_pks = cosigner_pks
                     .iter()
-                    .map(|pk| to_zkp_pk(*pk))
+                    .map(|pk| to_musig_pk(*pk))
                     .collect::<Vec<_>>();
-                MusigKeyAggCache::new(&secp_zkp, &cosigner_pks)
+                musig::KeyAggCache::new(&secp_musig, &cosigner_pks.iter().collect::<Vec<_>>())
             };
 
             let sweep_tap_tree = internal_node_script
-                .sweep_spend_leaf(&secp, from_zkp_xonly(key_agg_cache.agg_pk()));
+                .sweep_spend_leaf(&secp, from_musig_xonly(key_agg_cache.agg_pk()));
 
-            let tweak = zkp::SecretKey::from_slice(sweep_tap_tree.tap_tweak().as_byte_array())
-                .expect("valid conversion");
+            let tweak = ::musig::Scalar::from(
+                ::musig::SecretKey::from_slice(sweep_tap_tree.tap_tweak().as_byte_array())
+                    .expect("valid conversion"),
+            );
 
             key_agg_cache
-                .pubkey_xonly_tweak_add(&secp_zkp, tweak)
+                .pubkey_xonly_tweak_add(&secp_musig, &tweak)
                 .map_err(Error::crypto)?;
 
             let agg_pub_nonce = aggregate_pub_nonce_tree
@@ -352,7 +352,7 @@ pub fn sign_vtxo_tree(
                 .ok_or_else(|| Error::crypto(format!("missing pub nonce {i}, {j}")))?;
 
             // Equivalent to parsing the individual `MusigAggNonce` from a slice.
-            let agg_nonce = MusigAggNonce::new(&secp_zkp, &[agg_pub_nonce]);
+            let agg_nonce = musig::AggregatedNonce::new(&secp_musig, &[&agg_pub_nonce]);
 
             let msg = virtual_tx_sighash(node, vtxo_tree, i, round_tx)?;
 
@@ -360,9 +360,8 @@ pub fn sign_vtxo_tree(
                 .take_sk(i, j)
                 .ok_or(Error::crypto("missing nonce {i}, {j}"))?;
 
-            let sig = MusigSession::new(&secp_zkp, &key_agg_cache, agg_nonce, msg)
-                .partial_sign(&secp_zkp, nonce_sk, &own_cosigner_kp, &key_agg_cache)
-                .map_err(Error::crypto)?;
+            let sig = musig::Session::new(&secp_musig, &key_agg_cache, agg_nonce, msg)
+                .partial_sign(&secp_musig, nonce_sk, &own_cosigner_kp, &key_agg_cache);
 
             sigs_level.push(Some(sig));
         }
