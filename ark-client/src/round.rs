@@ -350,10 +350,14 @@ where
                         let mut our_nonce_tree_map = HashMap::new();
                         for own_cosigner_kp in own_cosigner_kps {
                             let own_cosigner_pk = own_cosigner_kp.public_key();
-                            let nonce_tree =
-                                generate_nonce_tree(rng, &unsigned_vtxo_tree, own_cosigner_pk)
-                                    .map_err(Error::from)
-                                    .context("failed to generate VTXO nonce tree")?;
+                            let nonce_tree = generate_nonce_tree(
+                                rng,
+                                &unsigned_vtxo_tree,
+                                own_cosigner_pk,
+                                &e.unsigned_round_tx,
+                            )
+                            .map_err(Error::from)
+                            .context("failed to generate VTXO nonce tree")?;
 
                             tracing::info!(
                                 cosigner_pk = %own_cosigner_pk,

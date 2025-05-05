@@ -689,7 +689,12 @@ async fn settle(
         .unsigned_vtxo_tree
         .expect("to have an unsigned VTXO tree");
 
-    let nonce_tree = generate_nonce_tree(&mut rng, &unsigned_vtxo_tree, cosigner_kp.public_key())?;
+    let nonce_tree = generate_nonce_tree(
+        &mut rng,
+        &unsigned_vtxo_tree,
+        cosigner_kp.public_key(),
+        &round_signing_event.unsigned_round_tx,
+    )?;
 
     grpc_client
         .submit_tree_nonces(
