@@ -30,7 +30,6 @@ use std::io::Write;
 
 /// The byte value corresponds to the string "taptree".
 const VTXO_TAPROOT_KEY: [u8; 7] = [116, 97, 112, 116, 114, 101, 101];
-// const VTXO_TAPROOT_KEY: [u8; 7] = [97, 112, 116, 114, 101, 101, 0];
 
 /// A VTXO to be spent into an unconfirmed VTXO.
 #[derive(Debug, Clone)]
@@ -124,8 +123,7 @@ pub fn build_redeem_transaction(
             FeeRate::from_sat_per_kwu(253),
             vtxos.as_slice(),
             outputs.len(),
-        )
-        .map_err(Error::from)?;
+        )?;
 
         computed_fee + extra_fee
     };

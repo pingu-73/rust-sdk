@@ -125,8 +125,10 @@ impl TxWeightEstimator {
     }
 
     /// VSize gets the estimated virtual size of the transactions, in vbytes.
+    #[allow(clippy::manual_div_ceil)]
     pub fn vsize(&self) -> usize {
         // A tx's vsize is 1/4 of the weight, rounded up.
+
         (self.weight() + 3) / 4
     }
 }
