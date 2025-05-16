@@ -15,7 +15,6 @@ use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::Denomination;
 use bitcoin::Network;
-use bitcoin::PublicKey;
 use serde::Deserialize;
 use serde::Serialize;
 use std::error::Error as StdError;
@@ -26,8 +25,8 @@ use std::str::FromStr;
 pub struct V1GetInfoResponse {
     #[serde(rename = "pubkey", skip_serializing_if = "Option::is_none")]
     pub pubkey: Option<String>,
-    #[serde(rename = "roundLifetime", skip_serializing_if = "Option::is_none")]
-    pub round_lifetime: Option<String>,
+    #[serde(rename = "vtxoTreeExpiry", skip_serializing_if = "Option::is_none")]
+    pub vtxo_tree_expiry: Option<String>,
     #[serde(
         rename = "unilateralExitDelay",
         skip_serializing_if = "Option::is_none"
@@ -53,13 +52,25 @@ pub struct V1GetInfoResponse {
     pub forfeit_address: Option<String>,
     #[serde(rename = "marketHour", skip_serializing_if = "Option::is_none")]
     pub market_hour: Option<Box<models::V1MarketHour>>,
+    #[serde(rename = "version", skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(rename = "utxoMinAmount", skip_serializing_if = "Option::is_none")]
+    pub utxo_min_amount: Option<String>,
+    #[serde(rename = "utxoMaxAmount", skip_serializing_if = "Option::is_none")]
+    pub utxo_max_amount: Option<String>,
+    #[serde(rename = "vtxoMinAmount", skip_serializing_if = "Option::is_none")]
+    pub vtxo_min_amount: Option<String>,
+    #[serde(rename = "vtxoMaxAmount", skip_serializing_if = "Option::is_none")]
+    pub vtxo_max_amount: Option<String>,
+    #[serde(rename = "boardingExitDelay", skip_serializing_if = "Option::is_none")]
+    pub boarding_exit_delay: Option<String>,
 }
 
 impl V1GetInfoResponse {
     pub fn new() -> V1GetInfoResponse {
         V1GetInfoResponse {
             pubkey: None,
-            round_lifetime: None,
+            vtxo_tree_expiry: None,
             unilateral_exit_delay: None,
             round_interval: None,
             network: None,
@@ -68,6 +79,12 @@ impl V1GetInfoResponse {
             vtxo_descriptor_templates: None,
             forfeit_address: None,
             market_hour: None,
+            version: None,
+            utxo_min_amount: None,
+            utxo_max_amount: None,
+            vtxo_min_amount: None,
+            vtxo_max_amount: None,
+            boarding_exit_delay: None,
         }
     }
 }
@@ -77,6 +94,8 @@ pub enum ConversionError {
     MissingPubkey,
     MissingRoundLifetime,
     MissingUnilateralExitDelay,
+    MissingBoardingExitDelay,
+    MissingVtxoTreeExpiry,
     MissingRoundInterval,
     MissingNetwork,
     MissingDust,
@@ -85,6 +104,11 @@ pub enum ConversionError {
     MissingForfeitAddress,
     InvalidNetwork,
     ParseError(&'static str),
+    MissingVersion,
+    MissingUtxoMinAmount,
+    MissingUtxoMaxAmount,
+    MissingVtxoMinAmount,
+    MissingVtxoMaxAmount,
 }
 
 impl fmt::Display for ConversionError {
@@ -92,8 +116,12 @@ impl fmt::Display for ConversionError {
         match self {
             ConversionError::MissingPubkey => write!(f, "Missing pubkey field"),
             ConversionError::MissingRoundLifetime => write!(f, "Missing round lifetime field"),
+            ConversionError::MissingVtxoTreeExpiry => write!(f, "Missing VTXO tree expiry field"),
             ConversionError::MissingUnilateralExitDelay => {
                 write!(f, "Missing unilateral exit delay field")
+            }
+            ConversionError::MissingBoardingExitDelay => {
+                write!(f, "Missing boarding exit delay field")
             }
             ConversionError::MissingRoundInterval => write!(f, "Missing round interval field"),
             ConversionError::MissingNetwork => write!(f, "Missing network field"),
@@ -102,11 +130,16 @@ impl fmt::Display for ConversionError {
                 write!(f, "Missing boarding descriptor template field")
             }
             ConversionError::InvalidNetwork => write!(f, "Invalid network value"),
-            ConversionError::ParseError(msg) => write!(f, "Parse error: {}", msg),
             ConversionError::MissingVtxoDescriptorTemplate => {
                 write!(f, "Missing vtxo descriptor template",)
             }
             ConversionError::MissingForfeitAddress => write!(f, "Missing forfeit address"),
+            ConversionError::MissingVersion => write!(f, "Missing version field"),
+            ConversionError::ParseError(msg) => write!(f, "Parse error: {}", msg),
+            ConversionError::MissingUtxoMinAmount => write!(f, "Missing UTXO minimum amount"),
+            ConversionError::MissingUtxoMaxAmount => write!(f, "Missing UTXO maximum amount"),
+            ConversionError::MissingVtxoMinAmount => write!(f, "Missing VTXO minimum amount"),
+            ConversionError::MissingVtxoMaxAmount => write!(f, "Missing VTXO maximum amount"),
         }
     }
 }
@@ -135,22 +168,23 @@ impl TryFrom<V1GetInfoResponse> for ark_core::server::Info {
         let dust = Amount::from_str_in(dust.as_str(), Denomination::Satoshi)
             .map_err(|_| ConversionError::ParseError("Failed to parse dust"))?;
 
+        let vtxo_tree_expiry = value
+            .vtxo_tree_expiry
+            .ok_or(ConversionError::MissingVtxoTreeExpiry)?
+            .parse()
+            .map_err(|_| ConversionError::ParseError("Failed to parse vtxo_tree_expiry"))?;
+
         let unilateral_exit_delay = value
             .unilateral_exit_delay
             .ok_or(ConversionError::MissingUnilateralExitDelay)?
             .parse()
             .map_err(|_| ConversionError::ParseError("Failed to parse unilateral_exit_delay"))?;
 
-        let vtxo_tree_expiry = value
-            .round_lifetime
-            // TODO: our ark server doesn't return this value. I'm not sure it is mandatory?
-            .unwrap_or("30".to_string());
-
-        let vtxo_tree_expiry_seconds = u32::from_str(vtxo_tree_expiry.as_str()).map_err(|_| {
-            ConversionError::ParseError("Failed to parse round_lifetime to seconds")
-        })?;
-        let vtxo_tree_expiry = bitcoin::Sequence::from_seconds_ceil(vtxo_tree_expiry_seconds)
-            .map_err(|_| ConversionError::ParseError("Failed to parse round_lifetime"))?;
+        let boarding_exit_delay = value
+            .boarding_exit_delay
+            .ok_or(ConversionError::MissingBoardingExitDelay)?
+            .parse()
+            .map_err(|_| ConversionError::ParseError("Failed to parse boarding_exit_delay"))?;
 
         let forfeit_address = value
             .forfeit_address
@@ -166,16 +200,68 @@ impl TryFrom<V1GetInfoResponse> for ark_core::server::Info {
             .boarding_descriptor_template
             .ok_or(ConversionError::MissingBoardingDescriptorTemplate)?;
 
+        let version = value.version.ok_or(ConversionError::MissingVersion)?;
+
+        let utxo_min_amount = value
+            .utxo_min_amount
+            .ok_or(ConversionError::MissingUtxoMinAmount)?
+            .parse::<i64>()
+            .map_err(|_| ConversionError::ParseError("Failed parsing utxo_min_amount"))?;
+
+        let utxo_min_amount = match utxo_min_amount.is_negative() {
+            true => None,
+            false => Some(Amount::from_sat(utxo_min_amount as u64)),
+        };
+
+        let utxo_max_amount = value
+            .utxo_max_amount
+            .ok_or(ConversionError::MissingUtxoMaxAmount)?
+            .parse::<i64>()
+            .map_err(|_| ConversionError::ParseError("Failed parsing utxo_max_amount"))?;
+
+        let utxo_max_amount = match utxo_max_amount.is_negative() {
+            true => None,
+            false => Some(Amount::from_sat(utxo_max_amount as u64)),
+        };
+
+        let vtxo_min_amount = value
+            .vtxo_min_amount
+            .ok_or(ConversionError::MissingVtxoMinAmount)?
+            .parse::<i64>()
+            .map_err(|_| ConversionError::ParseError("Failed parsing vtxo_min_amount"))?;
+
+        let vtxo_min_amount = match vtxo_min_amount.is_negative() {
+            true => None,
+            false => Some(Amount::from_sat(vtxo_min_amount as u64)),
+        };
+
+        let vtxo_max_amount = value
+            .vtxo_max_amount
+            .ok_or(ConversionError::MissingVtxoMaxAmount)?
+            .parse::<i64>()
+            .map_err(|_| ConversionError::ParseError("Failed parsing vtxo_max_amount"))?;
+
+        let vtxo_max_amount = match vtxo_max_amount.is_negative() {
+            true => None,
+            false => Some(Amount::from_sat(vtxo_max_amount as u64)),
+        };
+
         Ok(ark_core::server::Info {
             pk: pubkey,
             vtxo_tree_expiry,
             unilateral_exit_delay,
+            boarding_exit_delay,
             round_interval,
             network,
             dust,
             boarding_descriptor_template,
             vtxo_descriptor_templates,
             forfeit_address: forfeit_address.assume_checked(),
+            version,
+            utxo_min_amount,
+            utxo_max_amount,
+            vtxo_min_amount,
+            vtxo_max_amount,
         })
     }
 }

@@ -21,9 +21,11 @@ pub struct V1RoundFinalizationEvent {
     #[serde(rename = "vtxoTree", skip_serializing_if = "Option::is_none")]
     pub vtxo_tree: Option<Box<models::V1Tree>>,
     #[serde(rename = "connectors", skip_serializing_if = "Option::is_none")]
-    pub connectors: Option<Vec<String>>,
+    pub connectors: Option<Box<models::V1Tree>>,
     #[serde(rename = "minRelayFeeRate", skip_serializing_if = "Option::is_none")]
     pub min_relay_fee_rate: Option<String>,
+    #[serde(rename = "connectorsIndex", skip_serializing_if = "Option::is_none")]
+    pub connectors_index: Option<std::collections::HashMap<String, models::V1Outpoint>>,
 }
 
 impl V1RoundFinalizationEvent {
@@ -34,6 +36,7 @@ impl V1RoundFinalizationEvent {
             vtxo_tree: None,
             connectors: None,
             min_relay_fee_rate: None,
+            connectors_index: None,
         }
     }
 }

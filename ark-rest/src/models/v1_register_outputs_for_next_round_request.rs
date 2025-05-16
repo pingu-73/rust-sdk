@@ -19,6 +19,8 @@ pub struct V1RegisterOutputsForNextRoundRequest {
     /// List of receivers for to convert to leaves in the next VTXO tree.
     #[serde(rename = "outputs", skip_serializing_if = "Option::is_none")]
     pub outputs: Option<Vec<models::V1Output>>,
+    #[serde(rename = "musig2", skip_serializing_if = "Option::is_none")]
+    pub musig2: Option<Box<models::V1Musig2>>,
 }
 
 impl V1RegisterOutputsForNextRoundRequest {
@@ -26,6 +28,7 @@ impl V1RegisterOutputsForNextRoundRequest {
         V1RegisterOutputsForNextRoundRequest {
             request_id: None,
             outputs: None,
+            musig2: None,
         }
     }
 }

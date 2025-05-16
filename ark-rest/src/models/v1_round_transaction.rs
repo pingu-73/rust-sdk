@@ -17,7 +17,7 @@ pub struct V1RoundTransaction {
     #[serde(rename = "txid", skip_serializing_if = "Option::is_none")]
     pub txid: Option<String>,
     #[serde(rename = "spentVtxos", skip_serializing_if = "Option::is_none")]
-    pub spent_vtxos: Option<Vec<models::V1Outpoint>>,
+    pub spent_vtxos: Option<Vec<models::V1Vtxo>>,
     #[serde(rename = "spendableVtxos", skip_serializing_if = "Option::is_none")]
     pub spendable_vtxos: Option<Vec<models::V1Vtxo>>,
     #[serde(
@@ -25,6 +25,8 @@ pub struct V1RoundTransaction {
         skip_serializing_if = "Option::is_none"
     )]
     pub claimed_boarding_utxos: Option<Vec<models::V1Outpoint>>,
+    #[serde(rename = "hex", skip_serializing_if = "Option::is_none")]
+    pub hex: Option<String>,
 }
 
 impl V1RoundTransaction {
@@ -34,6 +36,7 @@ impl V1RoundTransaction {
             spent_vtxos: None,
             spendable_vtxos: None,
             claimed_boarding_utxos: None,
+            hex: None,
         }
     }
 }
