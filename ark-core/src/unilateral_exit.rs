@@ -339,17 +339,22 @@ pub fn prepare_vtxo_tree_transactions(
             continue;
         }
 
-        let round_psbt = &round.round_tx;
-
-        let round_tx = round
+        let round_psbt = round
             .round_tx
+            .clone()
+            .ok_or_else(|| Error::ad_hoc("missing round TX"))?;
+
+        let round_tx = round_psbt
             .clone()
             .extract_tx()
             .map_err(Error::transaction)?;
         let round_txid = round_tx.compute_txid();
-        vtxo_trees
-            .entry(round_txid)
-            .or_insert_with(|| round.vtxo_tree.clone());
+
+        let round_vtxo_tree = round
+            .vtxo_tree
+            .clone()
+            .ok_or_else(|| Error::ad_hoc("missing round VTXO tree"))?;
+        vtxo_trees.entry(round_txid).or_insert(round_vtxo_tree);
 
         let vtxo_tree = vtxo_trees.get(&round_txid).expect("is there");
 

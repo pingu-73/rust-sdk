@@ -1,84 +1,13 @@
 //! Messages exchanged between the client and the Ark server.
 
-use crate::ark_address::ArkAddress;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Amount;
 use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
-use bitcoin::ScriptBuf;
 use bitcoin::Txid;
 use musig::musig;
 use std::collections::HashMap;
-
-#[derive(Clone, Debug)]
-pub struct RoundInput {
-    outpoint: OutPoint,
-    /// All the scripts hidden in the leaves of the Taproot tree for this input.
-    tapscripts: Vec<ScriptBuf>,
-}
-
-impl RoundInput {
-    pub fn new(outpoint: OutPoint, tapscripts: Vec<ScriptBuf>) -> Self {
-        Self {
-            outpoint,
-            tapscripts,
-        }
-    }
-
-    pub fn outpoint(&self) -> OutPoint {
-        self.outpoint
-    }
-
-    pub fn tapscripts(&self) -> &[ScriptBuf] {
-        &self.tapscripts
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RoundOutput {
-    address: RoundOutputAddress,
-    amount: Amount,
-}
-
-impl RoundOutput {
-    pub fn new_virtual(address: ArkAddress, amount: Amount) -> Self {
-        Self {
-            address: RoundOutputAddress::Virtual(address),
-            amount,
-        }
-    }
-
-    pub fn new_on_chain(address: bitcoin::Address, amount: Amount) -> Self {
-        Self {
-            address: RoundOutputAddress::OnChain(address),
-            amount,
-        }
-    }
-
-    pub fn address(&self) -> &RoundOutputAddress {
-        &self.address
-    }
-
-    pub fn amount(&self) -> Amount {
-        self.amount
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum RoundOutputAddress {
-    Virtual(ArkAddress),
-    OnChain(bitcoin::Address),
-}
-
-impl RoundOutputAddress {
-    pub fn serialize(&self) -> String {
-        match self {
-            RoundOutputAddress::Virtual(address) => address.encode(),
-            RoundOutputAddress::OnChain(address) => address.to_string(),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct TxTree {
@@ -86,14 +15,6 @@ pub struct TxTree {
 }
 
 impl TxTree {
-    pub fn leaves_wrong(&self) -> Vec<TxTreeNode> {
-        self.levels
-            .last()
-            .map(|l| &l.nodes)
-            .cloned()
-            .unwrap_or_default()
-    }
-
     pub fn leaves(&self) -> Vec<TxTreeNode> {
         let mut leaves = self
             .levels
@@ -131,10 +52,10 @@ pub struct Round {
     pub id: String,
     pub start: i64,
     pub end: i64,
-    pub round_tx: Psbt,
-    pub vtxo_tree: TxTree,
+    pub round_tx: Option<Psbt>,
+    pub vtxo_tree: Option<TxTree>,
     pub forfeit_txs: Vec<Psbt>,
-    pub connector_tree: TxTree,
+    pub connector_tree: Option<TxTree>,
     pub stage: i32,
 }
 
