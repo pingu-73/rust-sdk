@@ -4,6 +4,7 @@ use bitcoin::OutPoint;
 pub mod boarding_output;
 pub mod coin_select;
 pub mod conversions;
+pub mod proof_of_funds;
 pub mod redeem;
 pub mod round;
 pub mod server;

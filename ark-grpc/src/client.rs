@@ -1,26 +1,22 @@
 use crate::generated;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
 use crate::generated::ark::v1::explorer_service_client::ExplorerServiceClient;
-use crate::generated::ark::v1::input::TaprootTree;
+use crate::generated::ark::v1::Bip322Signature;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetInfoRequest;
 use crate::generated::ark::v1::GetRoundRequest;
 use crate::generated::ark::v1::GetTransactionsStreamRequest;
-use crate::generated::ark::v1::Input;
 use crate::generated::ark::v1::ListVtxosRequest;
-use crate::generated::ark::v1::Musig2;
 use crate::generated::ark::v1::Outpoint;
-use crate::generated::ark::v1::Output;
 use crate::generated::ark::v1::PingRequest;
-use crate::generated::ark::v1::RegisterInputsForNextRoundRequest;
-use crate::generated::ark::v1::RegisterOutputsForNextRoundRequest;
+use crate::generated::ark::v1::RegisterIntentRequest;
 use crate::generated::ark::v1::SubmitRedeemTxRequest;
 use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
-use crate::generated::ark::v1::Tapscripts;
 use crate::tree;
 use crate::Error;
+use ark_core::proof_of_funds;
 use ark_core::server::Info;
 use ark_core::server::ListVtxo;
 use ark_core::server::RedeemTransaction;
@@ -28,8 +24,6 @@ use ark_core::server::Round;
 use ark_core::server::RoundFailedEvent;
 use ark_core::server::RoundFinalizationEvent;
 use ark_core::server::RoundFinalizedEvent;
-use ark_core::server::RoundInput;
-use ark_core::server::RoundOutput;
 use ark_core::server::RoundSigningEvent;
 use ark_core::server::RoundSigningNoncesGeneratedEvent;
 use ark_core::server::RoundStreamEvent;
@@ -147,77 +141,30 @@ impl Client {
         Ok(ListVtxo { spent, spendable })
     }
 
-    pub async fn register_inputs_for_next_round(
+    pub async fn register_intent(
         &self,
-        inputs: &[RoundInput],
+        intent_message: &proof_of_funds::IntentMessage,
+        proof: &proof_of_funds::Bip322Proof,
     ) -> Result<String, Error> {
         let mut client = self.inner_ark_client()?;
 
-        let inputs = inputs
-            .iter()
-            .map(|input| {
-                let outpoint = input.outpoint();
-
-                let scripts = input
-                    .tapscripts()
-                    .iter()
-                    .map(|s| s.to_hex_string())
-                    .collect();
-
-                Input {
-                    outpoint: Some(Outpoint {
-                        txid: outpoint.txid.to_string(),
-                        vout: outpoint.vout,
-                    }),
-                    taproot_tree: Some(TaprootTree::Tapscripts(Tapscripts { scripts })),
-                }
-            })
-            .collect();
+        let request = RegisterIntentRequest {
+            bip322_signature: Some(Bip322Signature {
+                signature: proof.serialize(),
+                message: intent_message.encode().map_err(Error::conversion)?,
+            }),
+            // TODO: Notes not supported yet.
+            notes: Vec::new(),
+        };
 
         let response = client
-            .register_inputs_for_next_round(RegisterInputsForNextRoundRequest {
-                inputs,
-                notes: Vec::new(),
-            })
+            .register_intent(request)
             .await
             .map_err(Error::request)?;
+
         let request_id = response.into_inner().request_id;
 
         Ok(request_id)
-    }
-
-    pub async fn register_outputs_for_next_round(
-        &self,
-        request_id: String,
-        outpouts: &[RoundOutput],
-        cosigner_pks: &[PublicKey],
-        signing_all: bool,
-    ) -> Result<(), Error> {
-        let mut client = self.inner_ark_client()?;
-
-        let outputs = outpouts
-            .iter()
-            .map(|out| Output {
-                address: out.address().serialize(),
-                amount: out.amount().to_sat(),
-            })
-            .collect();
-
-        let cosigners_public_keys = cosigner_pks.iter().map(|pk| pk.to_string()).collect();
-
-        client
-            .register_outputs_for_next_round(RegisterOutputsForNextRoundRequest {
-                request_id,
-                outputs,
-                musig2: Some(Musig2 {
-                    cosigners_public_keys,
-                    signing_all,
-                }),
-            })
-            .await
-            .map_err(Error::request)?;
-
-        Ok(())
     }
 
     pub async fn submit_redeem_transaction(&self, redeem_psbt: Psbt) -> Result<Psbt, Error> {
@@ -404,6 +351,7 @@ impl Client {
             .map_err(Error::request)?;
 
         let response = response.into_inner();
+
         let round = response.round.map(Round::try_from).transpose()?;
 
         Ok(round)
@@ -625,12 +573,19 @@ impl TryFrom<generated::ark::v1::Round> for Round {
             base64::engine::GeneralPurposeConfig::new(),
         );
 
-        let round_tx = {
-            let psbt = base64.decode(&value.round_tx).map_err(Error::conversion)?;
-            Psbt::deserialize(&psbt).map_err(Error::conversion)?
+        let round_tx = match value.round_tx.is_empty() {
+            true => None,
+            false => {
+                let psbt = base64.decode(&value.round_tx).map_err(Error::conversion)?;
+                Some(Psbt::deserialize(&psbt).map_err(Error::conversion)?)
+            }
         };
 
-        let vtxo_tree = value.vtxo_tree.unwrap_or_default().try_into()?;
+        let vtxo_tree = value
+            .vtxo_tree
+            .map(TxTree::try_from)
+            .transpose()
+            .map_err(Error::conversion)?;
 
         let forfeit_txs = value
             .forfeit_txs
@@ -642,7 +597,11 @@ impl TryFrom<generated::ark::v1::Round> for Round {
             })
             .collect::<Result<Vec<_>, Error>>()?;
 
-        let connector_tree = TxTree::try_from(value.connectors.unwrap_or_default())?;
+        let connector_tree = value
+            .connectors
+            .map(TxTree::try_from)
+            .transpose()
+            .map_err(Error::conversion)?;
 
         Ok(Round {
             id: value.id,

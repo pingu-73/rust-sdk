@@ -50,24 +50,28 @@ const COSIGNER_PSBT_KEY_PREFIX: [u8; 8] = [111, 115, 105, 103, 110, 101, 114, 0]
 #[derive(Debug, Clone)]
 pub struct OnChainInput {
     /// The information needed to spend the UTXO.
-    ///
-    /// This does not include the amount, because the Ark server will provide that during the
-    /// process of signing the round transaction where this UTXO is used as an input.
     boarding_output: BoardingOutput,
+    /// The amount of coins locked in the UTXO.
+    amount: Amount,
     /// The location of this UTXO in the blockchain.
     outpoint: OutPoint,
 }
 
 impl OnChainInput {
-    pub fn new(boarding_output: BoardingOutput, outpoint: OutPoint) -> Self {
+    pub fn new(boarding_output: BoardingOutput, amount: Amount, outpoint: OutPoint) -> Self {
         Self {
             boarding_output,
+            amount,
             outpoint,
         }
     }
 
     pub fn boarding_output(&self) -> &BoardingOutput {
         &self.boarding_output
+    }
+
+    pub fn amount(&self) -> Amount {
+        self.amount
     }
 
     pub fn outpoint(&self) -> OutPoint {
@@ -98,12 +102,16 @@ impl VtxoInput {
         }
     }
 
-    pub fn outpoint(&self) -> OutPoint {
-        self.outpoint
-    }
-
     pub fn vtxo(&self) -> &Vtxo {
         &self.vtxo
+    }
+
+    pub fn amount(&self) -> Amount {
+        self.amount
+    }
+
+    pub fn outpoint(&self) -> OutPoint {
+        self.outpoint
     }
 }
 
@@ -550,6 +558,7 @@ where
     for OnChainInput {
         boarding_output,
         outpoint: boarding_outpoint,
+        ..
     } in onchain_inputs.iter()
     {
         let (forfeit_script, forfeit_control_block) = boarding_output.forfeit_spend_info();

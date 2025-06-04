@@ -7,6 +7,7 @@ use crate::Blockchain;
 use crate::Client;
 use crate::Error;
 use crate::ExplorerUtxo;
+use ark_core::proof_of_funds;
 use ark_core::round;
 use ark_core::round::create_and_sign_forfeit_txs;
 use ark_core::round::generate_nonce_tree;
@@ -14,8 +15,6 @@ use ark_core::round::sign_round_psbt;
 use ark_core::round::sign_vtxo_tree;
 use ark_core::round::NonceTree;
 use ark_core::round::PubNonceTree;
-use ark_core::server::RoundInput;
-use ark_core::server::RoundOutput;
 use ark_core::server::RoundStreamEvent;
 use ark_core::server::TxTree;
 use ark_core::ArkAddress;
@@ -27,6 +26,7 @@ use bitcoin::secp256k1::schnorr;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::Psbt;
+use bitcoin::TxOut;
 use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 use futures::FutureExt;
@@ -186,8 +186,11 @@ where
                         now.as_duration().try_into().map_err(Error::ad_hoc)?,
                         std::time::Duration::from_secs(*confirmation_blocktime),
                     ) {
-                        boarding_inputs
-                            .push(round::OnChainInput::new(boarding_output.clone(), *outpoint));
+                        boarding_inputs.push(round::OnChainInput::new(
+                            boarding_output.clone(),
+                            *amount,
+                            *outpoint,
+                        ));
                         total_amount += *amount;
                     }
                 }
@@ -241,27 +244,38 @@ where
         let own_cosigner_kp = Keypair::new(self.secp(), rng);
 
         let inputs = {
-            let boarding_inputs = onchain_inputs
-                .clone()
-                .into_iter()
-                .map(|o| RoundInput::new(o.outpoint(), o.boarding_output().tapscripts()));
+            let boarding_inputs = onchain_inputs.clone().into_iter().map(|o| {
+                proof_of_funds::Input::new(
+                    o.outpoint(),
+                    o.boarding_output().exit_delay(),
+                    TxOut {
+                        value: o.amount(),
+                        script_pubkey: o.boarding_output().script_pubkey(),
+                    },
+                    o.boarding_output().tapscripts(),
+                    o.boarding_output().owner_pk(),
+                    o.boarding_output().exit_spend_info(),
+                    true,
+                )
+            });
 
-            let vtxo_inputs = vtxo_inputs
-                .clone()
-                .into_iter()
-                .map(|v| RoundInput::new(v.outpoint(), v.vtxo().tapscripts()));
+            let vtxo_inputs = vtxo_inputs.clone().into_iter().map(|v| {
+                proof_of_funds::Input::new(
+                    v.outpoint(),
+                    v.vtxo().exit_delay(),
+                    TxOut {
+                        value: v.amount(),
+                        script_pubkey: v.vtxo().script_pubkey(),
+                    },
+                    v.vtxo().tapscripts(),
+                    v.vtxo().owner_pk(),
+                    v.vtxo().exit_spend_info(),
+                    false,
+                )
+            });
 
             boarding_inputs.chain(vtxo_inputs).collect::<Vec<_>>()
         };
-
-        let payment_id = self
-            .network_client()
-            .register_inputs_for_next_round(&inputs)
-            .await
-            .map_err(Error::from)
-            .context("failed to register round inputs")?;
-
-        tracing::debug!(payment_id, "Registered for round");
 
         let mut outputs = vec![];
 
@@ -269,26 +283,66 @@ where
             RoundOutputType::Board {
                 to_address,
                 to_amount,
-            } => outputs.push(RoundOutput::new_virtual(to_address, to_amount)),
+            } => outputs.push(proof_of_funds::Output::Offchain(TxOut {
+                value: to_amount,
+                script_pubkey: to_address.to_p2tr_script_pubkey(),
+            })),
             RoundOutputType::OffBoard {
                 to_address,
                 to_amount,
                 change_address,
                 change_amount,
             } => {
-                outputs.push(RoundOutput::new_on_chain(to_address, to_amount));
-                outputs.push(RoundOutput::new_virtual(change_address, change_amount));
+                outputs.push(proof_of_funds::Output::Onchain(TxOut {
+                    value: to_amount,
+                    script_pubkey: to_address.script_pubkey(),
+                }));
+                outputs.push(proof_of_funds::Output::Offchain(TxOut {
+                    value: change_amount,
+                    script_pubkey: change_address.to_p2tr_script_pubkey(),
+                }));
             }
         }
+
+        // Depending on whether we are generating new VTXOs or not, we start in a different step of
+        // this state machine.
+        let mut step = match outputs
+            .iter()
+            .any(|o| matches!(o, proof_of_funds::Output::Offchain(_)))
+        {
+            true => RoundStep::Start,
+            false => RoundStep::RoundSigningNoncesGenerated,
+        };
 
         let own_cosigner_kps = [own_cosigner_kp];
         let own_cosigner_pks = own_cosigner_kps
             .iter()
             .map(|k| k.public_key())
             .collect::<Vec<_>>();
-        self.network_client()
-            .register_outputs_for_next_round(payment_id.clone(), &outputs, &own_cosigner_pks, false)
+
+        let sign_for_onchain_pk_fn = |pk: &XOnlyPublicKey,
+                                      msg: &secp256k1::Message|
+         -> Result<schnorr::Signature, ark_core::Error> {
+            self.inner
+                .wallet
+                .sign_for_pk(pk, msg)
+                .map_err(|e| ark_core::Error::ad_hoc(e.to_string()))
+        };
+
+        let (bip322_proof, intent_message) = proof_of_funds::make_bip322_signature(
+            self.kp(),
+            sign_for_onchain_pk_fn,
+            inputs,
+            outputs,
+            own_cosigner_pks.clone(),
+        )?;
+
+        let request_id = self
+            .network_client()
+            .register_intent(&intent_message, &bip322_proof)
             .await?;
+
+        tracing::debug!(request_id, "Registered intent for round");
 
         let network_client = self.network_client();
 
@@ -301,7 +355,7 @@ where
             let network_client = network_client.clone();
             async move {
                 loop {
-                    if let Err(e) = network_client.ping(payment_id.clone()).await {
+                    if let Err(e) = network_client.ping(request_id.clone()).await {
                         tracing::warn!("Error via ping: {e:?}");
                     }
 
@@ -313,13 +367,13 @@ where
 
         spawn(ping_task);
 
-        let mut stream = network_client.get_event_stream().await?;
+        let round = network_client.get_round("".to_string()).await?;
+        let round_id = round.map(|r| r.id);
 
-        let mut step = RoundStep::Start;
+        let mut stream = network_client.get_event_stream().await?;
 
         let (ark_server_pk, _) = server_info.pk.x_only_public_key();
 
-        let mut round_id: Option<String> = None;
         let mut unsigned_round_tx: Option<Psbt> = None;
         let mut vtxo_tree: Option<TxTree> = None;
         let mut our_nonce_trees: Option<HashMap<Keypair, NonceTree>> = None;
@@ -332,8 +386,6 @@ where
                         }
 
                         tracing::info!(round_id = e.id, "Round signing started");
-
-                        round_id = Some(e.id.clone());
 
                         let unsigned_vtxo_tree =
                             e.unsigned_vtxo_tree.expect("to have an unsigned vtxo tree");
@@ -493,7 +545,7 @@ where
 
                         return Ok(round_txid);
                     }
-                    RoundStreamEvent::RoundFailed(e) => {
+                    RoundStreamEvent::RoundFailed(ref e) => {
                         if Some(&e.id) == round_id.as_ref() {
                             return Err(Error::ark_server(format!(
                                 "failed registering in round {}: {}",

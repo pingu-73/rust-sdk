@@ -136,6 +136,10 @@ impl Vtxo {
         &self.address
     }
 
+    pub fn owner_pk(&self) -> XOnlyPublicKey {
+        self.owner
+    }
+
     pub fn exit_delay(&self) -> bitcoin::Sequence {
         self.exit_delay
     }

@@ -4,6 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use ark_core::boarding_output::list_boarding_outpoints;
 use ark_core::boarding_output::BoardingOutpoints;
+use ark_core::proof_of_funds;
 use ark_core::redeem;
 use ark_core::redeem::build_redeem_transaction;
 use ark_core::redeem::sign_redeem_transaction;
@@ -13,8 +14,6 @@ use ark_core::round::generate_nonce_tree;
 use ark_core::round::sign_round_psbt;
 use ark_core::round::sign_vtxo_tree;
 use ark_core::server;
-use ark_core::server::RoundInput;
-use ark_core::server::RoundOutput;
 use ark_core::server::RoundStreamEvent;
 use ark_core::server::VtxoOutPoint;
 use ark_core::vtxo::list_virtual_tx_outpoints;
@@ -37,6 +36,7 @@ use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::ScriptBuf;
 use bitcoin::Transaction;
+use bitcoin::TxOut;
 use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 use esplora_client::FromHex;
@@ -627,50 +627,80 @@ async fn settle(
     let cosigner_kp = Keypair::new(&secp, &mut rng);
 
     let round_inputs = {
-        let boarding_inputs = boarding_outpoints
-            .spendable
-            .clone()
-            .into_iter()
-            .map(|o| RoundInput::new(o.0, o.2.tapscripts()));
+        let boarding_inputs = boarding_outpoints.spendable.clone().into_iter().map(
+            |(outpoint, amount, boarding_output)| {
+                proof_of_funds::Input::new(
+                    outpoint,
+                    boarding_output.exit_delay(),
+                    TxOut {
+                        value: amount,
+                        script_pubkey: boarding_output.script_pubkey(),
+                    },
+                    boarding_output.tapscripts(),
+                    boarding_output.owner_pk(),
+                    boarding_output.exit_spend_info(),
+                    true,
+                )
+            },
+        );
 
-        let vtxo_inputs = virtual_tx_outpoints
-            .spendable
-            .clone()
-            .into_iter()
-            .map(|v| RoundInput::new(v.0.outpoint, v.1.tapscripts()));
+        let vtxo_inputs = virtual_tx_outpoints.spendable.clone().into_iter().map(
+            |(virtual_tx_outpoint, vtxo)| {
+                proof_of_funds::Input::new(
+                    virtual_tx_outpoint.outpoint,
+                    vtxo.exit_delay(),
+                    TxOut {
+                        value: virtual_tx_outpoint.amount,
+                        script_pubkey: vtxo.script_pubkey(),
+                    },
+                    vtxo.tapscripts(),
+                    vtxo.owner_pk(),
+                    vtxo.exit_spend_info(),
+                    false,
+                )
+            },
+        );
 
         boarding_inputs.chain(vtxo_inputs).collect::<Vec<_>>()
     };
-
-    let payment_id = grpc_client
-        .register_inputs_for_next_round(&round_inputs)
-        .await?;
-
-    tracing::info!(
-        payment_id,
-        n_round_inputs = round_inputs.len(),
-        "Registered round inputs"
-    );
+    let n_round_inputs = round_inputs.len();
 
     let spendable_amount =
         boarding_outpoints.spendable_balance() + virtual_tx_outpoints.spendable_balance();
+    let round_outputs = vec![proof_of_funds::Output::Offchain(TxOut {
+        value: spendable_amount,
+        script_pubkey: to_address.to_p2tr_script_pubkey(),
+    })];
 
-    let round_outputs = vec![RoundOutput::new_virtual(to_address, spendable_amount)];
-    grpc_client
-        .register_outputs_for_next_round(
-            payment_id.clone(),
-            &round_outputs,
-            &[cosigner_kp.public_key()],
-            false,
-        )
+    let own_cosigner_kps = [cosigner_kp];
+    let own_cosigner_pks = own_cosigner_kps
+        .iter()
+        .map(|k| k.public_key())
+        .collect::<Vec<_>>();
+
+    let signing_kp = Keypair::from_secret_key(&secp, &sk);
+    let sign_for_onchain_pk_fn = |_: &XOnlyPublicKey,
+                                  msg: &secp256k1::Message|
+     -> Result<schnorr::Signature, ark_core::Error> {
+        Ok(secp.sign_schnorr_no_aux_rand(msg, &signing_kp))
+    };
+
+    let signing_kp = Keypair::from_secret_key(&secp, &sk);
+    let (bip322_proof, intent_message) = proof_of_funds::make_bip322_signature(
+        &signing_kp,
+        sign_for_onchain_pk_fn,
+        round_inputs,
+        round_outputs,
+        own_cosigner_pks.clone(),
+    )?;
+
+    let request_id = grpc_client
+        .register_intent(&intent_message, &bip322_proof)
         .await?;
 
-    tracing::info!(
-        n_round_outputs = round_outputs.len(),
-        "Registered round outputs"
-    );
+    tracing::info!(request_id, "Registered intent");
 
-    grpc_client.ping(payment_id).await?;
+    grpc_client.ping(request_id).await?;
 
     let mut event_stream = grpc_client.get_event_stream().await?;
 
@@ -761,10 +791,12 @@ async fn settle(
     let onchain_inputs = boarding_outpoints
         .spendable
         .into_iter()
-        .map(|(outpoint, _, boarding_output)| round::OnChainInput::new(boarding_output, outpoint))
+        .map(|(outpoint, amount, boarding_output)| {
+            round::OnChainInput::new(boarding_output, amount, outpoint)
+        })
         .collect::<Vec<_>>();
 
-    let round_psbt = if round_inputs.is_empty() {
+    let round_psbt = if n_round_inputs == 0 {
         None
     } else {
         let mut round_psbt = round_finalization_event.round_tx;
