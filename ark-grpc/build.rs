@@ -19,6 +19,7 @@ fn generate_protos() -> std::io::Result<()> {
                 "proto/ark/v1/service.proto",
                 "proto/ark/v1/wallet.proto",
                 "proto/ark/v1/explorer.proto",
+                "proto/ark/v1/indexer.proto",
                 "proto/ark/v1/types.proto",
             ],
             &["proto"],
