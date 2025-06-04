@@ -1,6 +1,7 @@
 use crate::generated;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
 use crate::generated::ark::v1::explorer_service_client::ExplorerServiceClient;
+use crate::generated::ark::v1::indexer_service_client::IndexerServiceClient;
 use crate::generated::ark::v1::Bip322Signature;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetInfoRequest;
@@ -53,6 +54,7 @@ pub struct Client {
     url: String,
     ark_client: Option<ArkServiceClient<tonic::transport::Channel>>,
     explorer_client: Option<ExplorerServiceClient<tonic::transport::Channel>>,
+    indexer_client: Option<IndexerServiceClient<tonic::transport::Channel>>,
 }
 
 impl Client {
@@ -61,6 +63,7 @@ impl Client {
             url,
             ark_client: None,
             explorer_client: None,
+            indexer_client: None,
         }
     }
 
@@ -71,9 +74,13 @@ impl Client {
         let explorer_client = ExplorerServiceClient::connect(self.url.clone())
             .await
             .map_err(Error::connect)?;
+        let indexer_client = IndexerServiceClient::connect(self.url.clone())
+            .await
+            .map_err(Error::connect)?;
 
         self.ark_client = Some(ark_service_client);
         self.explorer_client = Some(explorer_client);
+        self.indexer_client = Some(indexer_client);
         Ok(())
     }
 
@@ -365,6 +372,11 @@ impl Client {
         &self,
     ) -> Result<ExplorerServiceClient<tonic::transport::Channel>, Error> {
         self.explorer_client.clone().ok_or(Error::not_connected())
+    }
+    fn inner_indexer_client(
+        &self,
+    ) -> Result<IndexerServiceClient<tonic::transport::Channel>, Error> {
+        self.indexer_client.clone().ok_or(Error::not_connected())
     }
 }
 
