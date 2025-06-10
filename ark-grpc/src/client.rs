@@ -1,6 +1,7 @@
 use crate::generated;
 use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
 use crate::generated::ark::v1::explorer_service_client::ExplorerServiceClient;
+use crate::generated::ark::v1::indexer_service_client::IndexerServiceClient;
 use crate::generated::ark::v1::Bip322Signature;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetInfoRequest;
@@ -53,6 +54,7 @@ pub struct Client {
     url: String,
     ark_client: Option<ArkServiceClient<tonic::transport::Channel>>,
     explorer_client: Option<ExplorerServiceClient<tonic::transport::Channel>>,
+    indexer_client: Option<IndexerServiceClient<tonic::transport::Channel>>,
 }
 
 impl Client {
@@ -61,6 +63,7 @@ impl Client {
             url,
             ark_client: None,
             explorer_client: None,
+            indexer_client: None,
         }
     }
 
@@ -71,9 +74,13 @@ impl Client {
         let explorer_client = ExplorerServiceClient::connect(self.url.clone())
             .await
             .map_err(Error::connect)?;
+        let indexer_client = IndexerServiceClient::connect(self.url.clone())
+            .await
+            .map_err(Error::connect)?;
 
         self.ark_client = Some(ark_service_client);
         self.explorer_client = Some(explorer_client);
+        self.indexer_client = Some(indexer_client);
         Ok(())
     }
 
@@ -357,6 +364,28 @@ impl Client {
         Ok(round)
     }
 
+    pub async fn get_vtxo_chain(
+        &self,
+        outpoint: Option<OutPoint>,
+        size_and_index: Option<(i32, i32)>,
+    ) -> Result<VtxoChainResponse, Error> {
+        let mut client = self.inner_indexer_client()?;
+        let response = client
+            .get_vtxo_chain(generated::ark::v1::GetVtxoChainRequest {
+                outpoint: outpoint.map(|o| generated::ark::v1::IndexerOutpoint {
+                    txid: o.txid.to_string(),
+                    vout: o.vout,
+                }),
+                page: size_and_index
+                    .map(|(size, index)| generated::ark::v1::IndexerPageRequest { size, index }),
+            })
+            .await
+            .map_err(Error::request)?;
+        let response = response.into_inner();
+        let result = response.try_into()?;
+        Ok(result)
+    }
+
     fn inner_ark_client(&self) -> Result<ArkServiceClient<tonic::transport::Channel>, Error> {
         // Cloning an `ArkServiceClient<Channel>` is cheap.
         self.ark_client.clone().ok_or(Error::not_connected())
@@ -365,6 +394,11 @@ impl Client {
         &self,
     ) -> Result<ExplorerServiceClient<tonic::transport::Channel>, Error> {
         self.explorer_client.clone().ok_or(Error::not_connected())
+    }
+    fn inner_indexer_client(
+        &self,
+    ) -> Result<IndexerServiceClient<tonic::transport::Channel>, Error> {
+        self.indexer_client.clone().ok_or(Error::not_connected())
     }
 }
 
@@ -697,5 +731,91 @@ impl TryFrom<Outpoint> for OutPoint {
             vout: value.vout,
         };
         Ok(point)
+    }
+}
+
+pub struct VtxoChainResponse {
+    pub chain: Vec<VtxoChain>,
+    pub depth: i32,
+    pub root_commitment_txid: Txid,
+    pub page: Option<IndexerPage>,
+}
+
+pub struct VtxoChain {
+    pub txid: Txid,
+    pub spends: Vec<ChainedTx>,
+    pub expires_at: i64,
+}
+
+pub struct ChainedTx {
+    pub txid: Txid,
+    pub tx_type: i32,
+}
+
+pub struct IndexerPage {
+    pub current: i32,
+    pub next: i32,
+    pub total: i32,
+}
+
+impl TryFrom<generated::ark::v1::GetVtxoChainResponse> for VtxoChainResponse {
+    type Error = Error;
+
+    fn try_from(value: generated::ark::v1::GetVtxoChainResponse) -> Result<Self, Self::Error> {
+        let chain = value
+            .chain
+            .iter()
+            .map(VtxoChain::try_from)
+            .collect::<Result<Vec<_>, Error>>()?;
+        Ok(VtxoChainResponse {
+            chain,
+            depth: value.depth,
+            root_commitment_txid: Txid::from_str(value.root_commitment_txid.as_str())
+                .map_err(Error::conversion)?,
+            page: value
+                .page
+                .map(IndexerPage::try_from)
+                .transpose()
+                .map_err(Error::conversion)?,
+        })
+    }
+}
+
+impl TryFrom<&generated::ark::v1::IndexerChain> for VtxoChain {
+    type Error = Error;
+
+    fn try_from(value: &generated::ark::v1::IndexerChain) -> Result<Self, Self::Error> {
+        let spends = value
+            .spends
+            .iter()
+            .map(ChainedTx::try_from)
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        Ok(VtxoChain {
+            txid: value.txid.parse().map_err(Error::conversion)?,
+            spends,
+            expires_at: value.expires_at,
+        })
+    }
+}
+
+impl From<generated::ark::v1::IndexerPageResponse> for IndexerPage {
+    fn from(value: generated::ark::v1::IndexerPageResponse) -> Self {
+        IndexerPage {
+            current: value.current,
+            next: value.next,
+            total: value.total,
+        }
+    }
+}
+
+impl TryFrom<&generated::ark::v1::IndexerChainedTx> for ChainedTx {
+    type Error = Error;
+
+    fn try_from(value: &generated::ark::v1::IndexerChainedTx) -> Result<Self, Self::Error> {
+        Ok(ChainedTx {
+            txid: Txid::from_str(value.txid.as_str()).map_err(Error::conversion)?,
+            tx_type: value.r#type,
+        })
     }
 }

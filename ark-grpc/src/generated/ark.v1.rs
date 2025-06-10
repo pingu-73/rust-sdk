@@ -1699,3 +1699,625 @@ pub mod explorer_service_client {
         }
     }
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetCommitmentTxRequest {
+    #[prost(string, tag = "1")]
+    pub txid: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetCommitmentTxResponse {
+    #[prost(int64, tag = "1")]
+    pub started_at: i64,
+    #[prost(int64, tag = "2")]
+    pub ended_at: i64,
+    #[prost(map = "uint32, message", tag = "3")]
+    pub batches: ::std::collections::HashMap<u32, IndexerBatch>,
+    #[prost(uint64, tag = "4")]
+    pub total_input_amount: u64,
+    #[prost(int32, tag = "5")]
+    pub total_input_vtxos: i32,
+    #[prost(uint64, tag = "6")]
+    pub total_output_amount: u64,
+    #[prost(int32, tag = "7")]
+    pub total_output_vtxos: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetForfeitTxsRequest {
+    #[prost(string, tag = "1")]
+    pub txid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetForfeitTxsResponse {
+    #[prost(string, repeated, tag = "1")]
+    pub txids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetConnectorsRequest {
+    #[prost(string, tag = "1")]
+    pub txid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetConnectorsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub connectors: ::prost::alloc::vec::Vec<IndexerNode>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetCommitmentTxLeavesRequest {
+    #[prost(string, tag = "1")]
+    pub txid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetCommitmentTxLeavesResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub leaves: ::prost::alloc::vec::Vec<IndexerOutpoint>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVtxoTreeRequest {
+    #[prost(message, optional, tag = "1")]
+    pub batch_outpoint: ::core::option::Option<IndexerOutpoint>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVtxoTreeResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub vtxo_tree: ::prost::alloc::vec::Vec<IndexerNode>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVtxoTreeLeavesRequest {
+    #[prost(message, optional, tag = "1")]
+    pub batch_outpoint: ::core::option::Option<IndexerOutpoint>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVtxoTreeLeavesResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub leaves: ::prost::alloc::vec::Vec<IndexerOutpoint>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVtxosRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub addresses: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(bool, tag = "2")]
+    pub spendable_only: bool,
+    #[prost(bool, tag = "3")]
+    pub spent_only: bool,
+    #[prost(message, optional, tag = "4")]
+    pub page: ::core::option::Option<IndexerPageRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVtxosResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub vtxos: ::prost::alloc::vec::Vec<IndexerVtxo>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetTransactionHistoryRequest {
+    #[prost(string, tag = "1")]
+    pub address: ::prost::alloc::string::String,
+    #[prost(int64, tag = "2")]
+    pub start_time: i64,
+    #[prost(int64, tag = "3")]
+    pub end_time: i64,
+    #[prost(message, optional, tag = "4")]
+    pub page: ::core::option::Option<IndexerPageRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetTransactionHistoryResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub history: ::prost::alloc::vec::Vec<IndexerTxHistoryRecord>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVtxoChainRequest {
+    #[prost(message, optional, tag = "1")]
+    pub outpoint: ::core::option::Option<IndexerOutpoint>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVtxoChainResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub chain: ::prost::alloc::vec::Vec<IndexerChain>,
+    #[prost(int32, tag = "2")]
+    pub depth: i32,
+    #[prost(string, tag = "3")]
+    pub root_commitment_txid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "4")]
+    pub page: ::core::option::Option<IndexerPageResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVirtualTxsRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub txids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVirtualTxsResponse {
+    #[prost(string, repeated, tag = "1")]
+    pub txs: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetSweptCommitmentTxRequest {
+    #[prost(string, tag = "1")]
+    pub txid: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetSweptCommitmentTxResponse {
+    #[prost(string, repeated, tag = "1")]
+    pub swept_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubscribeForAddressesRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub addresses: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubscribeForAddressesResponse {
+    #[prost(string, tag = "1")]
+    pub address: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub new_vtxos: ::prost::alloc::vec::Vec<IndexerVtxo>,
+    #[prost(message, repeated, tag = "3")]
+    pub spent_vtxos: ::prost::alloc::vec::Vec<IndexerVtxo>,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct IndexerBatch {
+    #[prost(uint64, tag = "1")]
+    pub total_output_amount: u64,
+    #[prost(int32, tag = "2")]
+    pub total_output_vtxos: i32,
+    #[prost(int64, tag = "3")]
+    pub expires_at: i64,
+    #[prost(bool, tag = "4")]
+    pub swept: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IndexerOutpoint {
+    #[prost(string, tag = "1")]
+    pub txid: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub vout: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IndexerNode {
+    #[prost(string, tag = "1")]
+    pub txid: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub parent_txid: ::prost::alloc::string::String,
+    #[prost(int32, tag = "4")]
+    pub level: i32,
+    #[prost(int32, tag = "5")]
+    pub level_index: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IndexerVtxo {
+    #[prost(message, optional, tag = "1")]
+    pub outpoint: ::core::option::Option<IndexerOutpoint>,
+    #[prost(int64, tag = "2")]
+    pub created_at: i64,
+    #[prost(int64, tag = "3")]
+    pub expires_at: i64,
+    #[prost(uint64, tag = "4")]
+    pub amount: u64,
+    #[prost(string, tag = "5")]
+    pub script: ::prost::alloc::string::String,
+    #[prost(bool, tag = "6")]
+    pub is_leaf: bool,
+    #[prost(bool, tag = "7")]
+    pub is_swept: bool,
+    #[prost(bool, tag = "8")]
+    pub is_spent: bool,
+    #[prost(string, tag = "9")]
+    pub spent_by: ::prost::alloc::string::String,
+    #[prost(string, tag = "10")]
+    pub commitment_txid: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IndexerChain {
+    #[prost(string, tag = "1")]
+    pub txid: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub spends: ::prost::alloc::vec::Vec<IndexerChainedTx>,
+    #[prost(int64, tag = "3")]
+    pub expires_at: i64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IndexerChainedTx {
+    #[prost(string, tag = "1")]
+    pub txid: ::prost::alloc::string::String,
+    #[prost(enumeration = "IndexerChainedTxType", tag = "2")]
+    pub r#type: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IndexerTxHistoryRecord {
+    #[prost(enumeration = "IndexerTxType", tag = "3")]
+    pub r#type: i32,
+    #[prost(uint64, tag = "4")]
+    pub amount: u64,
+    #[prost(int64, tag = "5")]
+    pub created_at: i64,
+    #[prost(bool, tag = "6")]
+    pub is_settled: bool,
+    #[prost(string, tag = "7")]
+    pub settled_by: ::prost::alloc::string::String,
+    #[prost(oneof = "indexer_tx_history_record::Key", tags = "1, 2")]
+    pub key: ::core::option::Option<indexer_tx_history_record::Key>,
+}
+/// Nested message and enum types in `IndexerTxHistoryRecord`.
+pub mod indexer_tx_history_record {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Key {
+        #[prost(string, tag = "1")]
+        CommitmentTxid(::prost::alloc::string::String),
+        #[prost(string, tag = "2")]
+        VirtualTxid(::prost::alloc::string::String),
+    }
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct IndexerPageRequest {
+    #[prost(int32, tag = "1")]
+    pub size: i32,
+    #[prost(int32, tag = "2")]
+    pub index: i32,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct IndexerPageResponse {
+    #[prost(int32, tag = "1")]
+    pub current: i32,
+    #[prost(int32, tag = "2")]
+    pub next: i32,
+    #[prost(int32, tag = "3")]
+    pub total: i32,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum IndexerTxType {
+    Unspecified = 0,
+    Received = 1,
+    Sent = 2,
+}
+impl IndexerTxType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "INDEXER_TX_TYPE_UNSPECIFIED",
+            Self::Received => "INDEXER_TX_TYPE_RECEIVED",
+            Self::Sent => "INDEXER_TX_TYPE_SENT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "INDEXER_TX_TYPE_UNSPECIFIED" => Some(Self::Unspecified),
+            "INDEXER_TX_TYPE_RECEIVED" => Some(Self::Received),
+            "INDEXER_TX_TYPE_SENT" => Some(Self::Sent),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum IndexerChainedTxType {
+    Unspecified = 0,
+    Virtual = 1,
+    Commitment = 2,
+}
+impl IndexerChainedTxType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "INDEXER_CHAINED_TX_TYPE_UNSPECIFIED",
+            Self::Virtual => "INDEXER_CHAINED_TX_TYPE_VIRTUAL",
+            Self::Commitment => "INDEXER_CHAINED_TX_TYPE_COMMITMENT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "INDEXER_CHAINED_TX_TYPE_UNSPECIFIED" => Some(Self::Unspecified),
+            "INDEXER_CHAINED_TX_TYPE_VIRTUAL" => Some(Self::Virtual),
+            "INDEXER_CHAINED_TX_TYPE_COMMITMENT" => Some(Self::Commitment),
+            _ => None,
+        }
+    }
+}
+/// Generated client implementations.
+pub mod indexer_service_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value
+    )]
+    use tonic::codegen::http::Uri;
+    use tonic::codegen::*;
+    #[derive(Debug, Clone)]
+    pub struct IndexerServiceClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl IndexerServiceClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> IndexerServiceClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> IndexerServiceClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<http::Request<tonic::body::BoxBody>>>::Error:
+                Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            IndexerServiceClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        pub async fn get_commitment_tx(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetCommitmentTxRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetCommitmentTxResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.IndexerService/GetCommitmentTx");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.IndexerService", "GetCommitmentTx"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_forfeit_txs(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetForfeitTxsRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetForfeitTxsResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.IndexerService/GetForfeitTxs");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.IndexerService", "GetForfeitTxs"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_connectors(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetConnectorsRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetConnectorsResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.IndexerService/GetConnectors");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.IndexerService", "GetConnectors"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_commitment_tx_leaves(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetCommitmentTxLeavesRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetCommitmentTxLeavesResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/ark.v1.IndexerService/GetCommitmentTxLeaves",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.IndexerService",
+                "GetCommitmentTxLeaves",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_vtxo_tree(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetVtxoTreeRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetVtxoTreeResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.IndexerService/GetVtxoTree");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.IndexerService", "GetVtxoTree"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_vtxo_tree_leaves(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetVtxoTreeLeavesRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetVtxoTreeLeavesResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.IndexerService/GetVtxoTreeLeaves");
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.IndexerService",
+                "GetVtxoTreeLeaves",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_vtxos(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetVtxosRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetVtxosResponse>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.IndexerService/GetVtxos");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.IndexerService", "GetVtxos"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_transaction_history(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetTransactionHistoryRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetTransactionHistoryResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/ark.v1.IndexerService/GetTransactionHistory",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.IndexerService",
+                "GetTransactionHistory",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_vtxo_chain(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetVtxoChainRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetVtxoChainResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.IndexerService/GetVtxoChain");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.IndexerService", "GetVtxoChain"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_virtual_txs(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetVirtualTxsRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetVirtualTxsResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.IndexerService/GetVirtualTxs");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.IndexerService", "GetVirtualTxs"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_swept_commitment_tx(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetSweptCommitmentTxRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetSweptCommitmentTxResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.IndexerService/GetSweptCommitmentTx");
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.IndexerService",
+                "GetSweptCommitmentTx",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}

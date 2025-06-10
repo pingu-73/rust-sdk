@@ -8,6 +8,7 @@ use ark_core::server::VtxoOutPoint;
 use ark_core::ArkAddress;
 use ark_core::ArkTransaction;
 use ark_core::Vtxo;
+use ark_grpc::VtxoChainResponse;
 use bitcoin::key::Keypair;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::All;
@@ -382,6 +383,20 @@ where
         let round = self.network_client().get_round(round_txid).await?;
 
         Ok(round)
+    }
+
+    pub async fn get_vtxo_chain(
+        &self,
+        out_point: OutPoint,
+        size: i32,
+        index: i32,
+    ) -> Result<Option<VtxoChainResponse>, Error> {
+        let vtxo_chain = self
+            .network_client()
+            .get_vtxo_chain(Some(out_point), Some((size, index)))
+            .await?;
+
+        Ok(Some(vtxo_chain))
     }
 
     pub async fn spendable_vtxos(&self) -> Result<Vec<(Vec<VtxoOutPoint>, Vtxo)>, Error> {
