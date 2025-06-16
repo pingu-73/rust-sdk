@@ -575,4 +575,45 @@ where
     fn blockchain(&self) -> &B {
         &self.inner.blockchain
     }
+
+    pub async fn get_boarding_outputs(
+        &self,
+    ) -> Result<ark_core::boarding_output::BoardingOutpoints, Error> {
+        let boarding_outputs = self.inner.wallet.get_boarding_outputs()?;
+
+        let find_outpoints_fn =
+            |address: &Address| -> Result<Vec<ark_core::ExplorerUtxo>, ark_core::Error> {
+                let blockchain = self.blockchain();
+                let runtime = tokio::runtime::Handle::current();
+
+                tokio::task::block_in_place(|| {
+                    runtime.block_on(async {
+                        let explorer_utxos =
+                            blockchain.find_outpoints(address).await.map_err(|e| {
+                                ark_core::Error::ad_hoc(format!("Blockchain error: {}", e))
+                            })?;
+
+                        let core_utxos = explorer_utxos
+                            .into_iter()
+                            .map(|utxo| ark_core::ExplorerUtxo {
+                                outpoint: utxo.outpoint,
+                                amount: utxo.amount,
+                                confirmation_blocktime: utxo.confirmation_blocktime,
+                                is_spent: utxo.is_spent,
+                            })
+                            .collect();
+
+                        Ok(core_utxos)
+                    })
+                })
+            };
+
+        let boarding_outpoints = ark_core::boarding_output::list_boarding_outpoints(
+            find_outpoints_fn,
+            &boarding_outputs,
+        )
+        .map_err(Error::from)?;
+
+        Ok(boarding_outpoints)
+    }
 }
